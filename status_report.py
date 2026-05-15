@@ -56,7 +56,7 @@ Keep it professional and concise."""
 
 def send_report_email(project_name, report, rag_status):
     message = Mail(
-        from_email=("james@miami-coastline.com", "Rowan")
+        from_email="james@miami-coastline.com",
         to_emails="james@miami-coastline.com",
         subject=f"Weekly Status Report: {project_name} [{rag_status.upper()}]",
         plain_text_content=report
