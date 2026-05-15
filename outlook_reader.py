@@ -9,14 +9,17 @@ load_dotenv()
 
 CLIENT_ID = os.getenv("AZURE_CLIENT_ID")
 TENANT_ID = os.getenv("AZURE_TENANT_ID")
-SCOPES = ["Mail.Read"]
+REFRESH_TOKEN = os.getenv("OUTLOOK_REFRESH_TOKEN")
 
 def get_access_token():
     app = msal.PublicClientApplication(
         CLIENT_ID,
         authority=f"https://login.microsoftonline.com/{TENANT_ID}"
     )
-    token = app.acquire_token_interactive(scopes=SCOPES)
+    token = app.acquire_token_by_refresh_token(
+        REFRESH_TOKEN,
+        scopes=["Mail.Read"]
+    )
     return token["access_token"]
 
 def get_unread_emails(token):
@@ -28,7 +31,7 @@ def get_unread_emails(token):
     return response.json().get("value", [])
 
 def scan_outlook_for_tasks(project_id):
-    print("Opening Microsoft login...")
+    print("Connecting to Outlook silently...")
     token = get_access_token()
     emails = get_unread_emails(token)
     if not emails:
