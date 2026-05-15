@@ -53,5 +53,3 @@ def run_reminders():
     print(f"Found {len(tasks)} tasks due soon.")
     for task in tasks:
         send_reminder(task)
-
-run_reminders()
