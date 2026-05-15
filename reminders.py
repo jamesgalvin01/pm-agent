@@ -36,7 +36,7 @@ def get_due_tasks():
 def send_reminder(task):
     project_name = task[4] if task[4] else "No Project"
     message = Mail(
-    from_email=("james@miami-coastline.com", "Rowan"),
+    from_email="james@miami-coastline.com",
     to_emails="james@miami-coastline.com",
     subject=f"[{project_name}] Task Reminder: {task[1]}",
     plain_text_content=f"Project: {project_name}\nTask: {task[1]}\nDue: {task[2]}\nPriority: {task[3]}"
