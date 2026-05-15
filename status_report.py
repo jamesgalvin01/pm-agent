@@ -65,7 +65,8 @@ def send_report_email(project_name, report, rag_status):
     msg["Subject"] = f"Weekly Status Report: {project_name} [{rag_status.upper()}]"
     msg.attach(MIMEText(report, "plain"))
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+    with smtplib.SMTP("smtp.gmail.com", 587) as server:
+        server.starttls()
         server.login(gmail_user, gmail_password)
         server.sendmail(gmail_user, "james@miami-coastline.com", msg.as_string())
 
