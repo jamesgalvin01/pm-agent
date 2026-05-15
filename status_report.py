@@ -1,11 +1,12 @@
 import anthropic
 import json
 import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
 from db import get_connection
 from health_analyzer import analyze_health
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
 
 load_dotenv()
 
@@ -55,14 +56,19 @@ Keep it professional and concise."""
     return response.content[0].text
 
 def send_report_email(project_name, report, rag_status):
-    message = Mail(
-        from_email="james@miami-coastline.com",
-        to_emails="james@miami-coastline.com",
-        subject=f"Weekly Status Report: {project_name} [{rag_status.upper()}]",
-        plain_text_content=report
-    )
-    sg = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
-    sg.send(message)
+    gmail_user = os.getenv("GMAIL_USER")
+    gmail_password = os.getenv("GMAIL_APP_PASSWORD")
+
+    msg = MIMEMultipart()
+    msg["From"] = gmail_user
+    msg["To"] = "james@miami-coastline.com"
+    msg["Subject"] = f"Weekly Status Report: {project_name} [{rag_status.upper()}]"
+    msg.attach(MIMEText(report, "plain"))
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(gmail_user, gmail_password)
+        server.sendmail(gmail_user, "james@miami-coastline.com", msg.as_string())
+
     print(f"Status report emailed for: {project_name}")
 
 def run_status_report(project_id):
