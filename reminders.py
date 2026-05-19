@@ -98,11 +98,7 @@ def run_reminders():
     due_tasks = get_due_tasks()
     new_tasks = get_todays_tasks()
 
-    if not due_tasks:
-        print("No tasks due soon.")
-    else:
+    if due_tasks:
         print(f"Found {len(due_tasks)} tasks due soon.")
-        for task in due_tasks:
-            send_reminder(task)
 
     send_daily_summary(due_tasks, new_tasks)
