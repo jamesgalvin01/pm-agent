@@ -1,8 +1,8 @@
 import os
+import json
 import base64
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from task_extractor import extract_tasks_from_email
 from db import get_connection
@@ -10,17 +10,15 @@ from db import get_connection
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 def get_gmail_service():
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
+    token_data = os.getenv("GMAIL_TOKEN")
+    if token_data:
+        creds = Credentials.from_authorized_user_info(json.loads(token_data), SCOPES)
+    else:
+        raise Exception("GMAIL_TOKEN environment variable not set")
+    
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+    
     return build('gmail', 'v1', credentials=creds)
 
 def get_unread_emails(service):
@@ -71,5 +69,3 @@ def scan_gmail_for_tasks(project_id):
                 cur.close()
                 conn.close()
                 print(f"Saved {len(tasks)} tasks from email.")
-
-scan_gmail_for_tasks(2)
