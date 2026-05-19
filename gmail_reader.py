@@ -62,9 +62,14 @@ def scan_gmail_for_tasks(project_id):
                 cur = conn.cursor()
                 for task in tasks:
                     cur.execute(
-                        "INSERT INTO tasks (description, due_date, priority, status, source, project_id) VALUES (%s, %s, %s, %s, %s, %s)",
-                        (task.get("task"), task.get("due_date"), task.get("priority", "medium"), "open", "gmail", project_id)
+                        "SELECT id FROM tasks WHERE description = %s AND project_id = %s",
+                        (task.get("task"), project_id)
                     )
+                    if not cur.fetchone():
+                        cur.execute(
+                            "INSERT INTO tasks (description, due_date, priority, status, source, project_id) VALUES (%s, %s, %s, %s, %s, %s)",
+                            (task.get("task"), task.get("due_date"), task.get("priority", "medium"), "open", "gmail", project_id)
+                        )
                 conn.commit()
                 cur.close()
                 conn.close()
