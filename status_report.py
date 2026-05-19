@@ -1,9 +1,6 @@
 import anthropic
-import json
 import os
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import resend
 from dotenv import load_dotenv
 from db import get_connection
 from health_analyzer import analyze_health
@@ -11,6 +8,7 @@ from health_analyzer import analyze_health
 load_dotenv()
 
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+resend.api_key = os.getenv("RESEND_API_KEY")
 
 def get_project_data(project_id):
     conn = get_connection()
@@ -56,20 +54,13 @@ Keep it professional and concise."""
     return response.content[0].text
 
 def send_report_email(project_name, report, rag_status):
-    gmail_user = os.getenv("GMAIL_USER")
-    gmail_password = os.getenv("GMAIL_APP_PASSWORD")
-
-    msg = MIMEMultipart()
-    msg["From"] = gmail_user
-    msg["To"] = "james@miami-coastline.com"
-    msg["Subject"] = f"Weekly Status Report: {project_name} [{rag_status.upper()}]"
-    msg.attach(MIMEText(report, "plain"))
-
-    with smtplib.SMTP("smtp.gmail.com", 587) as server:
-        server.starttls()
-        server.login(gmail_user, gmail_password)
-        server.sendmail(gmail_user, "james@miami-coastline.com", msg.as_string())
-
+    params = {
+        "from": "Rowan <onboarding@resend.dev>",
+        "to": "james@miami-coastline.com",
+        "subject": f"Weekly Status Report: {project_name} [{rag_status.upper()}]",
+        "text": report
+    }
+    resend.Emails.send(params)
     print(f"Status report emailed for: {project_name}")
 
 def run_status_report(project_id):
