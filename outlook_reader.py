@@ -1,6 +1,7 @@
 import os
 import requests
 import msal
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from task_extractor import extract_tasks_from_email
 from db import get_connection
@@ -22,10 +23,11 @@ def get_access_token():
     )
     return token["access_token"]
 
-def get_unread_emails(token):
+def get_recent_emails(token):
+    since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime('%Y-%m-%dT%H:%M:%SZ')
     headers = {"Authorization": f"Bearer {token}"}
     response = requests.get(
-        "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$filter=isRead eq false&$top=5",
+        f"https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$filter=receivedDateTime ge {since}&$top=10",
         headers=headers
     )
     return response.json().get("value", [])
@@ -33,11 +35,11 @@ def get_unread_emails(token):
 def scan_outlook_for_tasks(project_id):
     print("Connecting to Outlook silently...")
     token = get_access_token()
-    emails = get_unread_emails(token)
+    emails = get_recent_emails(token)
     if not emails:
-        print("No unread emails found.")
+        print("No recent emails found.")
         return
-    print(f"Found {len(emails)} unread emails. Scanning for tasks...")
+    print(f"Found {len(emails)} recent emails. Scanning for tasks...")
     for email in emails:
         body = email.get("body", {}).get("content", "")
         if body:

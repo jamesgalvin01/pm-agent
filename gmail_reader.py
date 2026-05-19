@@ -25,7 +25,7 @@ def get_unread_emails(service):
     results = service.users().messages().list(
         userId='me',
         labelIds=['INBOX'],
-        q='is:unread'
+        q='newer_than:1d'
     ).execute()
     return results.get('messages', [])
 
