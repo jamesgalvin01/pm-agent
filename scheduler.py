@@ -6,17 +6,42 @@ from reminders import run_reminders
 from status_report import run_status_report
 from gmail_reader import scan_gmail_for_tasks
 from outlook_reader import scan_outlook_for_tasks
+from db import get_connection
 
-last_daily_run = None
-last_weekly_run = None
+def get_last_run(job_name):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS job_runs (
+            job_name TEXT PRIMARY KEY,
+            last_run DATE
+        )
+    """)
+    conn.commit()
+    cur.execute("SELECT last_run FROM job_runs WHERE job_name = %s", (job_name,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row[0] if row else None
+
+def set_last_run(job_name):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO job_runs (job_name, last_run)
+        VALUES (%s, %s)
+        ON CONFLICT (job_name) DO UPDATE SET last_run = EXCLUDED.last_run
+    """, (job_name, date.today()))
+    conn.commit()
+    cur.close()
+    conn.close()
 
 def run_daily_jobs():
-    global last_daily_run
     today = date.today()
-    if last_daily_run == today:
+    if get_last_run("daily") == today:
         print("Daily jobs already ran today, skipping.")
         return
-    last_daily_run = today
+    set_last_run("daily")
     print("Running daily jobs...")
     scan_gmail_for_tasks(2)
     scan_outlook_for_tasks(1)
@@ -24,12 +49,11 @@ def run_daily_jobs():
     print("Daily jobs complete.")
 
 def run_weekly_jobs():
-    global last_weekly_run
     today = date.today()
-    if last_weekly_run == today:
+    if get_last_run("weekly") == today:
         print("Weekly jobs already ran today, skipping.")
         return
-    last_weekly_run = today
+    set_last_run("weekly")
     print("Running weekly jobs...")
     run_status_report(1)
     run_status_report(2)
