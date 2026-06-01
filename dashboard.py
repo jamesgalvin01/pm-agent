@@ -14,10 +14,14 @@ from auth import (
     ALLOWED_EMAIL,
 )
 from mailer import send_magic_link_email
+from chat import router as chat_router
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 
 app = FastAPI()
+
+# Mount chat routes (/chat page + /api/chat/* JSON endpoints)
+app.include_router(chat_router)
 
 
 # ============================================================
@@ -111,7 +115,7 @@ def logout():
 
 
 # ============================================================
-# EXISTING ROUTES (now gated by require_auth)
+# EXISTING ROUTES (gated by require_auth)
 # ============================================================
 
 @app.post("/complete/{task_id}")
@@ -229,8 +233,9 @@ def home(filter: str = "open", email: str = Depends(require_auth)):
             body {{ font-family: Arial, sans-serif; margin: 0; background: #f5f7fa; }}
             .header {{ background: #1F3864; color: white; padding: 20px 40px; display:flex; justify-content:space-between; align-items:center; }}
             .header h1 {{ margin: 0; font-size: 24px; }}
+            .header nav a {{ color: white; margin-left: 20px; text-decoration: none; font-size: 14px; opacity: 0.85; }}
+            .header nav a:hover {{ opacity: 1; }}
             .header .user {{ font-size: 13px; opacity: 0.85; }}
-            .header .user a {{ color: white; margin-left: 12px; }}
             .container {{ padding: 30px 40px; }}
             .section-title {{ font-size: 20px; font-weight: bold; color: #1F3864; margin: 30px 0 15px; }}
             .cards {{ display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 10px; }}
@@ -250,6 +255,10 @@ def home(filter: str = "open", email: str = Depends(require_auth)):
     <body>
         <div class='header'>
             <h1>🤖 Rowan — Miami Coastline Management</h1>
+            <nav>
+                <a href='/'>Dashboard</a>
+                <a href='/chat'>Chat</a>
+            </nav>
             <div class='user'>
                 Signed in as {email}
                 <form method='post' action='/logout' style='display:inline'>
