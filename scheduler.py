@@ -3,7 +3,7 @@ import time
 import os
 from datetime import datetime, date
 from reminders import run_reminders
-from status_report import run_status_report
+from status_report import run_status_report, run_pipeline_report
 from gmail_reader import scan_gmail_for_tasks
 from outlook_reader import scan_outlook_for_tasks
 from rowan_nudges import run_nudge_pass
@@ -54,6 +54,7 @@ def run_weekly_jobs():
     print("Running weekly jobs...")
     run_status_report(1)
     run_status_report(2)
+    run_pipeline_report()
     print("Weekly jobs complete.")
 
 
