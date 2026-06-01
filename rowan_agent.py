@@ -135,6 +135,11 @@ TOOLS = [
             "required": ["name"],
         },
     },
+  {
+        "name": "list_people",
+        "description": "List all people in the team/collaborator directory. Returns each person's id, name, email, role, and open task count. Use this when the user asks who is on the team or who can be assigned tasks.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
 
     # ---------- WRITE TOOLS ----------
     {
@@ -326,6 +331,19 @@ def tool_lookup_person(args: dict) -> dict:
     cur.close()
     conn.close()
     return {"matches": matches}
+  def tool_list_people(args: dict) -> dict:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT p.id, p.name, p.email, p.role,
+               (SELECT COUNT(*) FROM tasks WHERE assignee_id = p.id AND status = 'open') AS open_task_count
+          FROM people p
+         ORDER BY p.name
+    """)
+    rows = [_clean(_row_to_dict(cur, r)) for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return {"count": len(rows), "people": rows}
 
 
 def tool_mark_task_complete(args: dict) -> dict:
@@ -438,6 +456,7 @@ TOOL_DISPATCH = {
     "list_projects":       tool_list_projects,
     "get_project_details": tool_get_project_details,
     "lookup_person":       tool_lookup_person,
+    "list_people":         tool_list_people,
     "mark_task_complete":  tool_mark_task_complete,
     "reopen_task":         tool_reopen_task,
     "create_task":         tool_create_task,
