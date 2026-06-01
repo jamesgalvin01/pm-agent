@@ -331,15 +331,16 @@ def tool_lookup_person(args: dict) -> dict:
     cur.close()
     conn.close()
     return {"matches": matches}
-  def tool_list_people(args: dict) -> dict:
+
+
+def tool_list_people(args: dict) -> dict:
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("""
-        SELECT p.id, p.name, p.email, p.role,
-               (SELECT COUNT(*) FROM tasks WHERE assignee_id = p.id AND status = 'open') AS open_task_count
-          FROM people p
-         ORDER BY p.name
-    """)
+    cur.execute(
+        "SELECT p.id, p.name, p.email, p.role, "
+        "(SELECT COUNT(*) FROM tasks WHERE assignee_id = p.id AND status = 'open') AS open_task_count "
+        "FROM people p ORDER BY p.name"
+    )
     rows = [_clean(_row_to_dict(cur, r)) for r in cur.fetchall()]
     cur.close()
     conn.close()
