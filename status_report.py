@@ -151,4 +151,3 @@ def run_pipeline_report():
     }
     resend.Emails.send(params)
     print("Pipeline report emailed.")
-

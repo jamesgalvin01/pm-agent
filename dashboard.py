@@ -1,12 +1,125 @@
-from fastapi import FastAPI, Request
+import os
+from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
-from db import get_connection
 import uvicorn
+
+from db import get_connection
+from auth import (
+    create_magic_link_token,
+    consume_magic_link_token,
+    create_session_jwt,
+    require_auth,
+    SESSION_COOKIE_NAME,
+    SESSION_DURATION,
+    ALLOWED_EMAIL,
+)
+from mailer import send_magic_link_email
+from chat import router as chat_router
+
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 
 app = FastAPI()
 
+# Mount chat routes (/chat page + /api/chat/* JSON endpoints)
+app.include_router(chat_router)
+
+
+# ============================================================
+# AUTH ROUTES
+# ============================================================
+
+@app.get("/login", response_class=HTMLResponse)
+def login_get(sent: int = 0):
+    msg = ""
+    if sent:
+        msg = """
+        <div style='background:#e8f5e9;color:#1b5e20;padding:14px 18px;border-radius:8px;margin-bottom:16px;'>
+            Check your email for a sign-in link. It's valid for 15 minutes.
+        </div>"""
+    return f"""
+    <html>
+    <head>
+        <title>Sign in — Rowan</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; background: #f5f7fa; margin: 0; }}
+            .wrap {{ max-width: 420px; margin: 80px auto; padding: 32px; background: white; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.08); }}
+            h1 {{ color: #1F3864; margin: 0 0 8px; font-size: 24px; }}
+            p {{ color: #666; margin: 0 0 24px; }}
+            label {{ display:block; font-size: 14px; color: #333; margin-bottom: 6px; }}
+            input[type=email] {{ width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px; box-sizing: border-box; }}
+            button {{ width: 100%; background: #1F3864; color: white; border: none; padding: 12px; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 16px; }}
+            button:hover {{ background: #2E5090; }}
+        </style>
+    </head>
+    <body>
+        <div class='wrap'>
+            <h1>🤖 Rowan</h1>
+            <p>Sign in with a one-time link sent to your email.</p>
+            {msg}
+            <form method='post' action='/login'>
+                <label>Email address</label>
+                <input type='email' name='email' required autofocus>
+                <button type='submit'>Send me a sign-in link</button>
+            </form>
+        </div>
+    </body>
+    </html>"""
+
+
+@app.post("/login")
+def login_post(email: str = Form(...)):
+    email_norm = email.lower().strip()
+
+    if email_norm == ALLOWED_EMAIL:
+        token = create_magic_link_token(email_norm)
+        link = f"{PUBLIC_BASE_URL}/auth/verify?token={token}"
+        try:
+            send_magic_link_email(email_norm, link)
+        except Exception as e:
+            print(f"[login] failed to send magic link to {email_norm}: {e}")
+
+    return RedirectResponse(url="/login?sent=1", status_code=303)
+
+
+@app.get("/auth/verify")
+def auth_verify(token: str):
+    email = consume_magic_link_token(token)
+    if not email or email != ALLOWED_EMAIL:
+        return HTMLResponse(
+            "<html><body style='font-family:Arial;padding:40px;'>"
+            "<h2>Link invalid or expired</h2>"
+            "<p>Magic links are valid for 15 minutes and can only be used once.</p>"
+            "<p><a href='/login'>Request a new link</a></p>"
+            "</body></html>",
+            status_code=400,
+        )
+
+    jwt_token = create_session_jwt(email)
+    response = RedirectResponse(url="/", status_code=303)
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=jwt_token,
+        max_age=int(SESSION_DURATION.total_seconds()),
+        httponly=True,
+        secure=True,
+        samesite="lax",
+    )
+    return response
+
+
+@app.post("/logout")
+def logout():
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie(SESSION_COOKIE_NAME)
+    return response
+
+
+# ============================================================
+# EXISTING ROUTES (gated by require_auth)
+# ============================================================
+
 @app.post("/complete/{task_id}")
-def complete_task(task_id: int):
+def complete_task(task_id: int, email: str = Depends(require_auth)):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("UPDATE tasks SET status = 'complete' WHERE id = %s", (task_id,))
@@ -15,8 +128,9 @@ def complete_task(task_id: int):
     conn.close()
     return RedirectResponse(url="/", status_code=303)
 
+
 @app.post("/reopen/{task_id}")
-def reopen_task(task_id: int):
+def reopen_task(task_id: int, email: str = Depends(require_auth)):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("UPDATE tasks SET status = 'open' WHERE id = %s", (task_id,))
@@ -25,8 +139,231 @@ def reopen_task(task_id: int):
     conn.close()
     return RedirectResponse(url="/", status_code=303)
 
+
+# ============================================================
+# LEADS ROUTES
+# ============================================================
+
+LEAD_STAGES = ["New", "Contacted", "Qualified", "Proposal", "Won", "Lost"]
+
+
+@app.post("/leads/add")
+def add_lead(
+    name: str = Form(...),
+    contact: str = Form(""),
+    value: float = Form(0),
+    status: str = Form("New"),
+    source: str = Form(""),
+    email: str = Depends(require_auth),
+):
+    if status not in LEAD_STAGES:
+        status = "New"
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO leads (name, contact, value, status, source)
+           VALUES (%s, %s, %s, %s, %s)""",
+        (name.strip(), contact.strip() or None, value or 0, status, source.strip() or None),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+    return RedirectResponse(url="/leads", status_code=303)
+
+
+@app.post("/leads/{lead_id}/status")
+def update_lead_status(
+    lead_id: int,
+    status: str = Form(...),
+    email: str = Depends(require_auth),
+):
+    if status not in LEAD_STAGES:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("UPDATE leads SET status = %s WHERE id = %s", (status, lead_id))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return RedirectResponse(url="/leads", status_code=303)
+
+
+@app.post("/leads/{lead_id}/delete")
+def delete_lead(lead_id: int, email: str = Depends(require_auth)):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM leads WHERE id = %s", (lead_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return RedirectResponse(url="/leads", status_code=303)
+
+
+@app.get("/leads", response_class=HTMLResponse)
+def leads_page(filter: str = "all", email: str = Depends(require_auth)):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    if filter in LEAD_STAGES:
+        cur.execute(
+            """SELECT id, name, contact, value, status, source
+               FROM leads WHERE status = %s
+               ORDER BY updated_at DESC""",
+            (filter,),
+        )
+    else:
+        cur.execute(
+            """SELECT id, name, contact, value, status, source
+               FROM leads
+               ORDER BY updated_at DESC"""
+        )
+    leads = cur.fetchall()
+
+    # Pipeline metrics
+    cur.execute("""
+        SELECT
+            COUNT(*),
+            COALESCE(SUM(value) FILTER (WHERE status NOT IN ('Won','Lost')), 0),
+            COALESCE(SUM(value) FILTER (WHERE status = 'Won'), 0),
+            COUNT(*) FILTER (WHERE status = 'Won'),
+            COUNT(*) FILTER (WHERE status IN ('Won','Lost'))
+        FROM leads
+    """)
+    total, open_val, won_val, won_count, closed_count = cur.fetchone()
+    win_rate = round(won_count / closed_count * 100) if closed_count else 0
+
+    cur.close()
+    conn.close()
+
+    stage_colors = {
+        "New": "#95a5a6", "Contacted": "#2E5090", "Qualified": "#8e44ad",
+        "Proposal": "#f39c12", "Won": "#27ae60", "Lost": "#e74c3c",
+    }
+
+    # Stage filter buttons
+    filter_btns = "<a href='/leads' class='filter-btn' style='{}'>All</a>".format(
+        "background:#1F3864;color:white;" if filter == "all" else ""
+    )
+    for s in LEAD_STAGES:
+        active = "background:#1F3864;color:white;" if filter == s else ""
+        filter_btns += f"<a href='/leads?filter={s}' class='filter-btn' style='{active}'>{s}</a>"
+
+    rows_html = ""
+    for l in leads:
+        lid, lname, lcontact, lvalue, lstatus, lsource = l
+        color = stage_colors.get(lstatus, "#999")
+        # status dropdown that submits on change
+        opts = "".join(
+            f"<option value='{s}'{' selected' if s == lstatus else ''}>{s}</option>"
+            for s in LEAD_STAGES
+        )
+        rows_html += f"""
+        <tr>
+            <td><strong>{lname}</strong></td>
+            <td>{lcontact or '—'}</td>
+            <td>{lsource or '—'}</td>
+            <td>${float(lvalue or 0):,.0f}</td>
+            <td>
+                <form method='post' action='/leads/{lid}/status' style='display:inline'>
+                    <select name='status' onchange='this.form.submit()'
+                        style='border:none;background:{color};color:white;padding:5px 10px;border-radius:12px;font-size:13px;cursor:pointer;'>
+                        {opts}
+                    </select>
+                </form>
+            </td>
+            <td>
+                <form method='post' action='/leads/{lid}/delete' style='display:inline'
+                    onsubmit='return confirm("Delete this lead?");'>
+                    <button type='submit' style='background:#e74c3c;color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;'>
+                        Delete
+                    </button>
+                </form>
+            </td>
+        </tr>"""
+
+    if not rows_html:
+        rows_html = "<tr><td colspan='6' style='color:#999;text-align:center;padding:24px;'>No leads yet — add one above.</td></tr>"
+
+    add_options = "".join(f"<option value='{s}'>{s}</option>" for s in LEAD_STAGES)
+
+    return f"""
+    <html>
+    <head>
+        <title>Leads — Rowan</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 0; background: #f5f7fa; }}
+            .header {{ background: #1F3864; color: white; padding: 20px 40px; display:flex; justify-content:space-between; align-items:center; }}
+            .header h1 {{ margin: 0; font-size: 24px; }}
+            .header nav a {{ color: white; margin-left: 20px; text-decoration: none; font-size: 14px; opacity: 0.85; }}
+            .header nav a:hover {{ opacity: 1; }}
+            .header .user {{ font-size: 13px; opacity: 0.85; }}
+            .container {{ padding: 30px 40px; }}
+            .section-title {{ font-size: 20px; font-weight: bold; color: #1F3864; margin: 30px 0 15px; }}
+            .cards {{ display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 10px; }}
+            .stat-card {{ background: white; border-radius: 10px; padding: 20px 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); text-align:center; min-width: 140px; }}
+            .stat-card .number {{ font-size: 32px; font-weight: bold; color: #1F3864; }}
+            .stat-card .label {{ color: #666; font-size: 14px; }}
+            table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
+            th {{ background: #2E5090; color: white; padding: 12px 16px; text-align: left; font-size: 14px; }}
+            td {{ padding: 12px 16px; border-bottom: 1px solid #f0f0f0; font-size: 14px; }}
+            tr:last-child td {{ border-bottom: none; }}
+            .filter-btn {{ padding: 8px 18px; border-radius: 20px; border: 2px solid #1F3864; background: white; color: #1F3864; cursor: pointer; font-size: 13px; text-decoration: none; }}
+            .filters {{ display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }}
+            .add-form {{ background: white; border-radius: 10px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }}
+            .add-form label {{ display:block; font-size:12px; color:#666; margin-bottom:4px; }}
+            .add-form input, .add-form select {{ padding: 9px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }}
+            .add-form button {{ background:#1F3864;color:white;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600; }}
+        </style>
+    </head>
+    <body>
+        <div class='header'>
+            <h1>🤖 Rowan — Leads</h1>
+            <nav>
+                <a href='/'>Dashboard</a>
+                <a href='/leads'>Leads</a>
+                <a href='/chat'>Chat</a>
+            </nav>
+            <div class='user'>
+                Signed in as {email}
+                <form method='post' action='/logout' style='display:inline'>
+                    <button type='submit' style='background:none;border:none;color:white;cursor:pointer;text-decoration:underline;font-size:13px;'>Sign out</button>
+                </form>
+            </div>
+        </div>
+        <div class='container'>
+            <div class='section-title'>Pipeline</div>
+            <div class='cards'>
+                <div class='stat-card'><div class='number'>{total}</div><div class='label'>Total Leads</div></div>
+                <div class='stat-card'><div class='number'>${float(open_val):,.0f}</div><div class='label'>Open Pipeline</div></div>
+                <div class='stat-card'><div class='number'>${float(won_val):,.0f}</div><div class='label'>Won Value</div></div>
+                <div class='stat-card'><div class='number'>{win_rate}%</div><div class='label'>Win Rate</div></div>
+            </div>
+
+            <div class='section-title'>Add a lead</div>
+            <form method='post' action='/leads/add' class='add-form'>
+                <div><label>Company / name</label><input type='text' name='name' required></div>
+                <div><label>Contact</label><input type='text' name='contact'></div>
+                <div><label>Value ($)</label><input type='number' name='value' min='0' step='100' value='0'></div>
+                <div><label>Stage</label><select name='status'>{add_options}</select></div>
+                <div><label>Source</label><input type='text' name='source'></div>
+                <button type='submit'>+ Add lead</button>
+            </form>
+
+            <div class='section-title'>All leads</div>
+            <div class='filters'>{filter_btns}</div>
+            <table>
+                <tr>
+                    <th>Name</th><th>Contact</th><th>Source</th><th>Value</th><th>Stage</th><th></th>
+                </tr>
+                {rows_html}
+            </table>
+        </div>
+    </body>
+    </html>"""
+
+
 @app.get("/", response_class=HTMLResponse)
-def home(filter: str = "open"):
+def home(filter: str = "open", email: str = Depends(require_auth)):
     conn = get_connection()
     cur = conn.cursor()
 
@@ -118,6 +455,9 @@ def home(filter: str = "open"):
             body {{ font-family: Arial, sans-serif; margin: 0; background: #f5f7fa; }}
             .header {{ background: #1F3864; color: white; padding: 20px 40px; display:flex; justify-content:space-between; align-items:center; }}
             .header h1 {{ margin: 0; font-size: 24px; }}
+            .header nav a {{ color: white; margin-left: 20px; text-decoration: none; font-size: 14px; opacity: 0.85; }}
+            .header nav a:hover {{ opacity: 1; }}
+            .header .user {{ font-size: 13px; opacity: 0.85; }}
             .container {{ padding: 30px 40px; }}
             .section-title {{ font-size: 20px; font-weight: bold; color: #1F3864; margin: 30px 0 15px; }}
             .cards {{ display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 10px; }}
@@ -137,6 +477,17 @@ def home(filter: str = "open"):
     <body>
         <div class='header'>
             <h1>🤖 Rowan — Miami Coastline Management</h1>
+            <nav>
+                <a href='/'>Dashboard</a>
+                <a href='/leads'>Leads</a>
+                <a href='/chat'>Chat</a>
+            </nav>
+            <div class='user'>
+                Signed in as {email}
+                <form method='post' action='/logout' style='display:inline'>
+                    <button type='submit' style='background:none;border:none;color:white;cursor:pointer;text-decoration:underline;font-size:13px;'>Sign out</button>
+                </form>
+            </div>
         </div>
         <div class='container'>
             <div class='section-title'>Projects</div>
@@ -170,6 +521,18 @@ def home(filter: str = "open"):
         </div>
     </body>
     </html>"""
+
+
+# ============================================================
+# Exception handler so require_auth's 307 redirects actually redirect
+# ============================================================
+
+@app.exception_handler(HTTPException)
+async def auth_redirect_handler(request: Request, exc: HTTPException):
+    if exc.status_code == 307 and "Location" in (exc.headers or {}):
+        return RedirectResponse(url=exc.headers["Location"], status_code=307)
+    raise exc
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
