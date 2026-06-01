@@ -1,20 +1,20 @@
 """
 chat.py — Rowan's interactive chat interface.
 
-Stage 3: read-only.
+Routes:
 - GET  /chat                              -> renders the chat page (auth required)
 - GET  /api/chat/conversations            -> list user's conversations (JSON)
 - GET  /api/chat/messages?conversation_id -> messages in a conversation (JSON)
 - POST /api/chat/conversations            -> create a new conversation
-
-Stage 4 will add POST /api/chat/send (calls Claude, persists assistant turn).
+- POST /api/chat/send                     -> user posts a message, Claude replies
 """
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from db import get_connection
 from auth import require_auth
+from rowan_agent import run_agent_turn
 
 router = APIRouter()
 
@@ -24,13 +24,9 @@ router = APIRouter()
 # ============================================================
 
 def _ensure_default_conversation() -> int:
-    """
-    Ensure at least one conversation exists. Returns the id of the most
-    recent conversation, creating a seeded 'General' thread if none exist.
-    """
+    """Ensure at least one conversation exists. Returns its id."""
     conn = get_connection()
     cur = conn.cursor()
-
     cur.execute("SELECT id FROM conversations ORDER BY last_message_at DESC NULLS LAST, id DESC LIMIT 1")
     row = cur.fetchone()
     if row:
@@ -39,7 +35,6 @@ def _ensure_default_conversation() -> int:
         conn.close()
         return conv_id
 
-    # No conversations yet — create one and seed a welcome message
     cur.execute(
         "INSERT INTO conversations (title, status) VALUES (%s, %s) RETURNING id",
         ("General", "active"),
@@ -50,9 +45,8 @@ def _ensure_default_conversation() -> int:
         (
             conv_id,
             "assistant",
-            "Hi James — I'm Rowan. This is where we'll talk things through. "
-            "Right now I can show you what I know, but I can't reply yet. "
-            "We'll wire that up in the next step.",
+            "Hi James — I'm Rowan. Ask me about projects, tasks, people, or risks. "
+            "I can also create or modify tasks, but I'll confirm with you before making any changes.",
         ),
     )
     conn.commit()
@@ -98,6 +92,7 @@ def list_messages(
     conversation_id: int = Query(...),
     email: str = Depends(require_auth),
 ):
+    """Return user-visible messages only (skip tool_result rows, hide raw tool_calls)."""
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
@@ -105,6 +100,9 @@ def list_messages(
         SELECT id, role, content, created_at
           FROM messages
          WHERE conversation_id = %s
+           AND role IN ('user', 'assistant')
+           AND content IS NOT NULL
+           AND content != ''
          ORDER BY created_at ASC, id ASC
         """,
         (conversation_id,),
@@ -138,13 +136,31 @@ def create_conversation(email: str = Depends(require_auth)):
     return JSONResponse({"id": conv_id})
 
 
+@router.post("/api/chat/send")
+def send_message(
+    payload: dict = Body(...),
+    email: str = Depends(require_auth),
+):
+    conversation_id = payload.get("conversation_id")
+    text = (payload.get("text") or "").strip()
+    if not conversation_id or not text:
+        raise HTTPException(status_code=400, detail="conversation_id and text are required")
+
+    try:
+        reply = run_agent_turn(int(conversation_id), text)
+    except Exception as e:
+        print(f"[send] agent turn failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Agent error: {e}")
+
+    return JSONResponse({"reply": reply})
+
+
 # ============================================================
 # Chat page
 # ============================================================
 
 @router.get("/chat", response_class=HTMLResponse)
 def chat_page(email: str = Depends(require_auth)):
-    # Make sure there's something to look at
     initial_conv_id = _ensure_default_conversation()
 
     return f"""
@@ -184,14 +200,17 @@ def chat_page(email: str = Depends(require_auth)):
             .msg.assistant .bubble {{ background: white; color: #1a1a1a; border: 1px solid #e6e8ec; }}
             .msg.user .bubble {{ background: #1F3864; color: white; }}
             .msg .meta {{ font-size: 11px; color: #999; margin-top: 4px; }}
+            .thinking {{ color: #999; font-style: italic; padding: 12px 16px; }}
+            .thinking .dot {{ animation: blink 1.4s infinite both; }}
+            .thinking .dot:nth-child(2) {{ animation-delay: 0.2s; }}
+            .thinking .dot:nth-child(3) {{ animation-delay: 0.4s; }}
+            @keyframes blink {{ 0% {{opacity:.2;}} 20% {{opacity:1;}} 100% {{opacity:.2;}} }}
 
             .composer {{ border-top: 1px solid #e6e8ec; padding: 16px 24px; background: white; flex-shrink: 0; }}
             .composer form {{ display: flex; gap: 10px; }}
             .composer textarea {{ flex: 1; padding: 12px 14px; border: 1px solid #ccc; border-radius: 10px; font-size: 14px; resize: none; font-family: inherit; min-height: 44px; max-height: 120px; }}
-            .composer textarea:disabled {{ background: #f5f6f8; color: #999; cursor: not-allowed; }}
             .composer button {{ background: #1F3864; color: white; border: none; padding: 0 22px; border-radius: 10px; font-size: 14px; cursor: pointer; font-weight: 500; }}
             .composer button:disabled {{ background: #c4c9d1; cursor: not-allowed; }}
-            .composer .note {{ font-size: 11px; color: #999; margin-top: 6px; }}
         </style>
     </head>
     <body>
@@ -223,21 +242,21 @@ def chat_page(email: str = Depends(require_auth)):
                     <div class='empty'>Loading...</div>
                 </div>
                 <div class='composer'>
-                    <form onsubmit='return false;'>
+                    <form id='composer-form'>
                         <textarea
                             id='composer-input'
-                            placeholder='Sending will be enabled in the next step...'
-                            disabled
+                            placeholder='Ask Rowan anything... (Enter to send, Shift+Enter for newline)'
+                            rows='1'
                         ></textarea>
-                        <button type='submit' disabled>Send</button>
+                        <button id='send-btn' type='submit'>Send</button>
                     </form>
-                    <div class='note'>Stage 3: read-only. Sending coming in Stage 4.</div>
                 </div>
             </main>
         </div>
 
         <script>
             let activeConvId = {initial_conv_id};
+            let sending = false;
 
             async function loadConversations() {{
                 const res = await fetch('/api/chat/conversations');
@@ -267,18 +286,20 @@ def chat_page(email: str = Depends(require_auth)):
                     el.innerHTML = "<div class='empty'>No messages in this conversation yet.</div>";
                     return;
                 }}
-                el.innerHTML = list.map(m => {{
-                    const when = m.created_at
-                        ? new Date(m.created_at).toLocaleString(undefined, {{hour:'numeric', minute:'2-digit'}})
-                        : '';
-                    return `<div class='msg ${{m.role}}'>
-                                <div>
-                                    <div class='bubble'>${{escapeHtml(m.content)}}</div>
-                                    <div class='meta'>${{when}}</div>
-                                </div>
-                            </div>`;
-                }}).join('');
+                el.innerHTML = list.map(renderMessage).join('');
                 el.scrollTop = el.scrollHeight;
+            }}
+
+            function renderMessage(m) {{
+                const when = m.created_at
+                    ? new Date(m.created_at).toLocaleString(undefined, {{hour:'numeric', minute:'2-digit'}})
+                    : '';
+                return `<div class='msg ${{m.role}}'>
+                            <div>
+                                <div class='bubble'>${{escapeHtml(m.content)}}</div>
+                                <div class='meta'>${{when}}</div>
+                            </div>
+                        </div>`;
             }}
 
             function selectConversation(convId) {{
@@ -295,15 +316,79 @@ def chat_page(email: str = Depends(require_auth)):
                 await loadMessages(activeConvId);
             }}
 
+            async function sendMessage(text) {{
+                if (sending || !text.trim()) return;
+                sending = true;
+                const sendBtn = document.getElementById('send-btn');
+                const input = document.getElementById('composer-input');
+                sendBtn.disabled = true;
+                input.disabled = true;
+
+                // Optimistically render the user message
+                const msgsEl = document.getElementById('messages');
+                msgsEl.insertAdjacentHTML('beforeend', renderMessage({{
+                    role: 'user', content: text, created_at: new Date().toISOString()
+                }}));
+                // Thinking indicator
+                msgsEl.insertAdjacentHTML('beforeend',
+                    `<div id='thinking' class='msg assistant'><div><div class='bubble thinking'>
+                        <span class='dot'>●</span> <span class='dot'>●</span> <span class='dot'>●</span>
+                     </div></div></div>`);
+                msgsEl.scrollTop = msgsEl.scrollHeight;
+
+                try {{
+                    const res = await fetch('/api/chat/send', {{
+                        method: 'POST',
+                        headers: {{'Content-Type': 'application/json'}},
+                        body: JSON.stringify({{conversation_id: activeConvId, text: text}})
+                    }});
+                    if (!res.ok) {{
+                        const err = await res.text();
+                        throw new Error(err || 'request failed');
+                    }}
+                    // Reload from DB (authoritative)
+                    document.getElementById('thinking')?.remove();
+                    await loadMessages(activeConvId);
+                    await loadConversations();
+                }} catch (e) {{
+                    document.getElementById('thinking')?.remove();
+                    msgsEl.insertAdjacentHTML('beforeend',
+                        `<div class='msg assistant'><div><div class='bubble' style='border-color:#e74c3c;color:#c0392b;'>
+                            Something went wrong: ${{escapeHtml(String(e))}}
+                         </div></div></div>`);
+                }} finally {{
+                    sending = false;
+                    sendBtn.disabled = false;
+                    input.disabled = false;
+                    input.value = '';
+                    input.focus();
+                }}
+            }}
+
             function escapeHtml(s) {{
                 return (s || '').replace(/[&<>"']/g, c => (
                     {{'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}}[c]
                 ));
             }}
 
+            // Composer wiring
+            const form = document.getElementById('composer-form');
+            const input = document.getElementById('composer-input');
+            form.addEventListener('submit', (e) => {{
+                e.preventDefault();
+                sendMessage(input.value);
+            }});
+            input.addEventListener('keydown', (e) => {{
+                if (e.key === 'Enter' && !e.shiftKey) {{
+                    e.preventDefault();
+                    sendMessage(input.value);
+                }}
+            }});
+
             // Initial load
             loadConversations();
             loadMessages(activeConvId);
+            input.focus();
         </script>
     </body>
     </html>"""
