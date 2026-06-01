@@ -79,15 +79,15 @@ schedule.every().day.at("08:00").do(run_daily_jobs)
 schedule.every().monday.at("08:00").do(run_weekly_jobs)
 
 # Rowan proactive nudges — business-hours, M-F (weekend skip is inside the job)
+schedule.every().day.at("08:00").do(run_nudges_job)
 schedule.every().day.at("12:00").do(run_nudges_job)
 schedule.every().day.at("16:00").do(run_nudges_job)
-schedule.every().day.at("20:00").do(run_nudges_job)
 
 print("Scheduler started.")
 print("- Gmail will be scanned every day at 8am.")
 print("- Reminders will run every day at 8am.")
 print("- Status reports will run every Monday at 8am.")
-print("- Rowan nudges run at 12:00 / 16:00 / 20:00 UTC, weekdays only.")
+print("- Rowan nudges run at 08:00 / 12:00 / 16:00 Eastern, weekdays only.")
 print("Press Ctrl+C to stop.")
 
 while True:
