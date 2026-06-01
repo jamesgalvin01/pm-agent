@@ -479,6 +479,7 @@ def home(filter: str = "open", email: str = Depends(require_auth)):
             <h1>🤖 Rowan — Miami Coastline Management</h1>
             <nav>
                 <a href='/'>Dashboard</a>
+                <a href='/leads'>Leads</a>
                 <a href='/chat'>Chat</a>
             </nav>
             <div class='user'>
