@@ -194,10 +194,37 @@ TOOLS = [
             "required": ["project_name", "description"],
         },
     },
+    {
+        "name": "create_person",
+        "description": "Add a new person to the team directory. REQUIRES prior user confirmation. Use this when James wants to add someone he works with so they can be assigned tasks.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name":  {"type": "string", "description": "Full name. Required."},
+                "email": {"type": "string", "description": "Email address. Required (the schema enforces uniqueness)."},
+                "role":  {"type": "string", "description": "Job title or role (e.g., 'Foreman', 'Project Manager'). Optional."},
+            },
+            "required": ["name", "email"],
+        },
+    },
+    {
+        "name": "update_person",
+        "description": "Update an existing person's name, email, or role. REQUIRES prior user confirmation. Look the person up by id (preferred) or by name.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "person_id":  {"type": "integer", "description": "Person id. Use this if you have it."},
+                "match_name": {"type": "string",  "description": "Substring of the person's name to match. Used only when person_id is not given. Must match exactly one person."},
+                "name":  {"type": "string", "description": "New name. Optional."},
+                "email": {"type": "string", "description": "New email. Optional."},
+                "role":  {"type": "string", "description": "New role. Optional."},
+            },
+        },
+    },
 ]
 
 
-WRITE_TOOLS = {"mark_task_complete", "reopen_task", "create_task", "add_risk"}
+WRITE_TOOLS = {"mark_task_complete", "reopen_task", "create_task", "add_risk", "create_person", "update_person"}
 
 
 # ============================================================
@@ -317,21 +344,20 @@ def tool_lookup_person(args: dict) -> dict:
     name = args["name"]
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id, name, email, role FROM people WHERE LOWER(name) LIKE %s LIMIT 5", (f"%{name.lower()}%",))
+    cur.execute(
+        "SELECT id, name, email, role FROM people WHERE LOWER(name) LIKE %s LIMIT 5",
+        (f"%{name.lower()}%",),
+    )
     matches = [_clean(_row_to_dict(cur, r)) for r in cur.fetchall()]
-    if not matches:
-        cur.close()
-        conn.close()
-        return {"error": f"No person matching '{name}'"}
-
     for p in matches:
-        cur.execute("SELECT COUNT(*) FROM tasks WHERE assignee_id = %s AND status = 'open'", (p["id"],))
+        cur.execute(
+            "SELECT COUNT(*) FROM tasks WHERE assignee_id = %s AND status = 'open'",
+            (p["id"],),
+        )
         p["open_task_count"] = cur.fetchone()[0]
-
     cur.close()
     conn.close()
-    return {"matches": matches}
-
+    return {"count": len(matches), "matches": matches}
 
 def tool_list_people(args: dict) -> dict:
     conn = get_connection()
@@ -451,6 +477,83 @@ def tool_add_risk(args: dict) -> dict:
     conn.close()
     return {"ok": True, "risk_id": new_id, "project_id": project_id}
 
+def tool_create_person(args: dict) -> dict:
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO people (name, email, role) VALUES (%s, %s, %s) RETURNING id",
+            (args["name"], args["email"], args.get("role")),
+        )
+        new_id = cur.fetchone()[0]
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        cur.close()
+        conn.close()
+        return {"error": f"Could not create person: {e}"}
+    cur.close()
+    conn.close()
+    return {"ok": True, "person_id": new_id, "name": args["name"], "email": args["email"]}
+
+
+def tool_update_person(args: dict) -> dict:
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # Resolve target
+    person_id = args.get("person_id")
+    if not person_id:
+        match_name = args.get("match_name")
+        if not match_name:
+            cur.close()
+            conn.close()
+            return {"error": "Provide either person_id or match_name."}
+        cur.execute(
+            "SELECT id, name FROM people WHERE LOWER(name) LIKE %s LIMIT 2",
+            (f"%{match_name.lower()}%",),
+        )
+        rows = cur.fetchall()
+        if not rows:
+            cur.close()
+            conn.close()
+            return {"error": f"No person matching '{match_name}'"}
+        if len(rows) > 1:
+            cur.close()
+            conn.close()
+            return {"error": f"'{match_name}' matched multiple people; use person_id to disambiguate."}
+        person_id = rows[0][0]
+
+    # Build dynamic UPDATE
+    fields, params = [], []
+    for col in ("name", "email", "role"):
+        if args.get(col) is not None:
+            fields.append(f"{col} = %s")
+            params.append(args[col])
+    if not fields:
+        cur.close()
+        conn.close()
+        return {"error": "Nothing to update — provide at least one of name/email/role."}
+    params.append(person_id)
+
+    try:
+        cur.execute(
+            f"UPDATE people SET {', '.join(fields)} WHERE id = %s RETURNING id, name, email, role",
+            params,
+        )
+        row = cur.fetchone()
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        cur.close()
+        conn.close()
+        return {"error": f"Could not update person: {e}"}
+    cur.close()
+    conn.close()
+    if not row:
+        return {"error": f"No person with id {person_id}"}
+    return {"ok": True, "person": {"id": row[0], "name": row[1], "email": row[2], "role": row[3]}}
+
 
 TOOL_DISPATCH = {
     "list_open_tasks":     tool_list_open_tasks,
@@ -462,6 +565,8 @@ TOOL_DISPATCH = {
     "reopen_task":         tool_reopen_task,
     "create_task":         tool_create_task,
     "add_risk":            tool_add_risk,
+    "create_person":       tool_create_person,
+    "update_person":       tool_update_person,
 }
 
 
