@@ -25,6 +25,194 @@ app.include_router(chat_router)
 
 
 # ============================================================
+# SHARED STYLES — modern dark theme
+# ============================================================
+# One stylesheet shared across dashboard, leads, and login pages.
+# Self-hosted, so fixed hex values (no CSS-variable theming) and a
+# Google Fonts link for the Inter typeface + Tabler icon font.
+
+FONT_LINKS = """
+    <link rel='preconnect' href='https://fonts.googleapis.com'>
+    <link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
+    <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap' rel='stylesheet'>
+    <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.7.0/dist/tabler-icons.min.css'>"""
+
+BASE_CSS = """
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            margin: 0;
+            background: #0a0b0f;
+            color: #d4d7e0;
+            -webkit-font-smoothing: antialiased;
+        }
+        a { color: inherit; }
+
+        .header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 18px 32px;
+            background: #0d0f15;
+            border-bottom: 1px solid #1c1f2a;
+        }
+        .header .brand { display: flex; align-items: center; gap: 12px; }
+        .header .logo {
+            width: 34px; height: 34px; border-radius: 9px;
+            background: linear-gradient(135deg, #5b7cfa, #3d56c4);
+            display: flex; align-items: center; justify-content: center;
+            color: white; font-size: 19px;
+            box-shadow: 0 0 20px rgba(91,124,250,0.35);
+        }
+        .header h1 {
+            margin: 0; font-size: 16px; font-weight: 600;
+            color: #f4f5f8; letter-spacing: -0.2px;
+        }
+        .header .sub { font-size: 13px; color: #565a6b; font-weight: 400; }
+        .header nav { display: flex; align-items: center; gap: 4px; }
+        .header nav a {
+            color: #6b7080; text-decoration: none; font-size: 13px;
+            padding: 7px 14px; border-radius: 8px; transition: all 0.15s ease;
+        }
+        .header nav a:hover { color: #d4d7e0; background: #181b25; }
+        .header nav a.active { color: #f4f5f8; background: #181b25; }
+        .header .user { font-size: 13px; color: #565a6b; display: flex; align-items: center; gap: 12px; }
+        .header .user form button {
+            background: none; border: none; color: #6b7080;
+            cursor: pointer; font-size: 13px; font-family: inherit;
+            padding: 0; transition: color 0.15s ease;
+        }
+        .header .user form button:hover { color: #d4d7e0; }
+
+        .container { padding: 28px 32px; max-width: 1200px; }
+
+        .section-title {
+            font-size: 11px; font-weight: 600; color: #565a6b;
+            text-transform: uppercase; letter-spacing: 1.5px;
+            margin: 32px 0 14px;
+        }
+        .section-title:first-child { margin-top: 0; }
+
+        .cards {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 14px; margin-bottom: 8px;
+        }
+        .card {
+            background: #12141c; border: 1px solid #1c1f2a; border-radius: 14px;
+            padding: 18px; position: relative; overflow: hidden;
+        }
+        .card .rag-bar { position: absolute; top: 0; left: 0; width: 3px; height: 100%; }
+        .card h3 { margin: 0 0 12px; font-size: 14px; font-weight: 600; color: #e8eaf0; }
+        .card .rag-pill {
+            display: inline-block; font-size: 10px; font-weight: 600;
+            letter-spacing: 0.5px; padding: 4px 11px; border-radius: 20px;
+        }
+        .card .meta { font-size: 12px; color: #565a6b; margin: 14px 0 0; }
+
+        .stat-card {
+            background: #12141c; border: 1px solid #1c1f2a; border-radius: 14px;
+            padding: 18px; display: flex; flex-direction: column; justify-content: center;
+        }
+        .stat-card .number { font-size: 30px; font-weight: 700; letter-spacing: -1px; color: #5b7cfa; }
+        .stat-card .number.green { color: #2bd4a0; }
+        .stat-card .label {
+            font-size: 11px; color: #6b7080; margin-top: 6px;
+            text-transform: uppercase; letter-spacing: 0.8px;
+        }
+
+        .filters { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
+        .filter-btn {
+            font-size: 13px; padding: 7px 18px; border-radius: 8px;
+            border: 1px solid #1c1f2a; background: transparent; color: #8b90a0;
+            cursor: pointer; text-decoration: none; transition: all 0.15s ease;
+        }
+        .filter-btn:hover { color: #d4d7e0; border-color: #2a2e3c; }
+        .filter-btn.active { background: #5b7cfa; color: white; border-color: #5b7cfa; }
+
+        table {
+            width: 100%; border-collapse: collapse;
+            background: #12141c; border: 1px solid #1c1f2a;
+            border-radius: 14px; overflow: hidden;
+        }
+        th {
+            background: transparent; color: #565a6b; padding: 13px 20px;
+            text-align: left; font-size: 10px; font-weight: 600;
+            text-transform: uppercase; letter-spacing: 1px;
+            border-bottom: 1px solid #1c1f2a;
+        }
+        td { padding: 16px 20px; border-bottom: 1px solid #15171f; font-size: 13px; color: #d4d7e0; }
+        tr:last-child td { border-bottom: none; }
+        tr.complete td { color: #565a6b; }
+        td s { color: #565a6b; }
+
+        .pill {
+            display: inline-flex; align-items: center; gap: 5px;
+            font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: 8px;
+        }
+        .btn {
+            font-family: inherit; font-size: 12px; font-weight: 500;
+            border: none; padding: 6px 13px; border-radius: 8px; cursor: pointer;
+            display: inline-flex; align-items: center; gap: 5px; transition: opacity 0.15s ease;
+        }
+        .btn:hover { opacity: 0.85; }
+        .btn-done { background: rgba(43,212,160,0.12); color: #2bd4a0; }
+        .btn-reopen { background: rgba(139,144,160,0.12); color: #8b90a0; }
+        .btn-delete { background: rgba(255,107,107,0.12); color: #ff6b6b; }
+
+        .prio { font-weight: 600; }
+
+        .add-form {
+            background: #12141c; border: 1px solid #1c1f2a; border-radius: 14px;
+            padding: 20px; margin-bottom: 20px;
+            display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;
+        }
+        .add-form label { display: block; font-size: 11px; color: #565a6b; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .add-form input, .add-form select {
+            font-family: inherit; padding: 9px 12px; background: #0a0b0f;
+            border: 1px solid #1c1f2a; border-radius: 8px; font-size: 14px; color: #d4d7e0;
+        }
+        .add-form input:focus, .add-form select:focus { outline: none; border-color: #5b7cfa; }
+        .add-form button {
+            font-family: inherit; background: #5b7cfa; color: white; border: none;
+            padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500;
+            transition: opacity 0.15s ease;
+        }
+        .add-form button:hover { opacity: 0.9; }
+        .empty { color: #565a6b; text-align: center; padding: 28px; }"""
+
+
+def page_head(title: str) -> str:
+    return f"""
+    <head>
+        <title>{title}</title>
+        {FONT_LINKS}
+        <style>{BASE_CSS}</style>
+    </head>"""
+
+
+def header_html(email: str, active: str) -> str:
+    def cls(name):
+        return "active" if name == active else ""
+    return f"""
+        <div class='header'>
+            <div class='brand'>
+                <div class='logo'><i class='ti ti-sparkles'></i></div>
+                <h1>Rowan</h1>
+                <span class='sub'>Miami Coastline</span>
+            </div>
+            <nav>
+                <a href='/' class='{cls("dashboard")}'>Dashboard</a>
+                <a href='/leads' class='{cls("leads")}'>Leads</a>
+                <a href='/chat' class='{cls("chat")}'>Chat</a>
+            </nav>
+            <div class='user'>
+                <span>{email}</span>
+                <form method='post' action='/logout' style='display:inline'>
+                    <button type='submit'>Sign out</button>
+                </form>
+            </div>
+        </div>"""
+
+
+# ============================================================
 # AUTH ROUTES
 # ============================================================
 
@@ -33,27 +221,54 @@ def login_get(sent: int = 0):
     msg = ""
     if sent:
         msg = """
-        <div style='background:#e8f5e9;color:#1b5e20;padding:14px 18px;border-radius:8px;margin-bottom:16px;'>
+        <div style='background:rgba(43,212,160,0.12);color:#2bd4a0;padding:14px 18px;border-radius:10px;margin-bottom:18px;font-size:14px;'>
             Check your email for a sign-in link. It's valid for 15 minutes.
         </div>"""
     return f"""
     <html>
     <head>
         <title>Sign in — Rowan</title>
+        {FONT_LINKS}
         <style>
-            body {{ font-family: Arial, sans-serif; background: #f5f7fa; margin: 0; }}
-            .wrap {{ max-width: 420px; margin: 80px auto; padding: 32px; background: white; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.08); }}
-            h1 {{ color: #1F3864; margin: 0 0 8px; font-size: 24px; }}
-            p {{ color: #666; margin: 0 0 24px; }}
-            label {{ display:block; font-size: 14px; color: #333; margin-bottom: 6px; }}
-            input[type=email] {{ width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px; box-sizing: border-box; }}
-            button {{ width: 100%; background: #1F3864; color: white; border: none; padding: 12px; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 16px; }}
-            button:hover {{ background: #2E5090; }}
+            * {{ box-sizing: border-box; }}
+            body {{
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                background: #0a0b0f; margin: 0; color: #d4d7e0;
+                -webkit-font-smoothing: antialiased;
+                display: flex; align-items: center; justify-content: center; min-height: 100vh;
+            }}
+            .wrap {{
+                width: 100%; max-width: 400px; padding: 36px;
+                background: #12141c; border: 1px solid #1c1f2a; border-radius: 18px;
+            }}
+            .logo {{
+                width: 44px; height: 44px; border-radius: 12px;
+                background: linear-gradient(135deg, #5b7cfa, #3d56c4);
+                display: flex; align-items: center; justify-content: center;
+                color: white; font-size: 24px; margin-bottom: 20px;
+                box-shadow: 0 0 24px rgba(91,124,250,0.4);
+            }}
+            h1 {{ color: #f4f5f8; margin: 0 0 8px; font-size: 22px; font-weight: 600; letter-spacing: -0.3px; }}
+            p {{ color: #6b7080; margin: 0 0 24px; font-size: 14px; }}
+            label {{ display: block; font-size: 11px; color: #565a6b; margin-bottom: 7px; text-transform: uppercase; letter-spacing: 0.5px; }}
+            input[type=email] {{
+                width: 100%; padding: 12px 14px; background: #0a0b0f;
+                border: 1px solid #1c1f2a; border-radius: 10px; font-size: 14px;
+                color: #d4d7e0; font-family: inherit;
+            }}
+            input[type=email]:focus {{ outline: none; border-color: #5b7cfa; }}
+            button {{
+                width: 100%; background: #5b7cfa; color: white; border: none;
+                padding: 13px; border-radius: 10px; font-size: 15px; font-weight: 500;
+                cursor: pointer; margin-top: 18px; font-family: inherit; transition: opacity 0.15s ease;
+            }}
+            button:hover {{ opacity: 0.9; }}
         </style>
     </head>
     <body>
         <div class='wrap'>
-            <h1>🤖 Rowan</h1>
+            <div class='logo'><i class='ti ti-sparkles'></i></div>
+            <h1>Rowan</h1>
             <p>Sign in with a one-time link sent to your email.</p>
             {msg}
             <form method='post' action='/login'>
@@ -86,10 +301,10 @@ def auth_verify(token: str):
     email = consume_magic_link_token(token)
     if not email or email != ALLOWED_EMAIL:
         return HTMLResponse(
-            "<html><body style='font-family:Arial;padding:40px;'>"
+            "<html><body style='font-family:Inter,Arial,sans-serif;padding:40px;background:#0a0b0f;color:#d4d7e0;'>"
             "<h2>Link invalid or expired</h2>"
             "<p>Magic links are valid for 15 minutes and can only be used once.</p>"
-            "<p><a href='/login'>Request a new link</a></p>"
+            "<p><a href='/login' style='color:#5b7cfa;'>Request a new link</a></p>"
             "</body></html>",
             status_code=400,
         )
@@ -235,23 +450,24 @@ def leads_page(filter: str = "all", email: str = Depends(require_auth)):
     cur.close()
     conn.close()
 
+    # Stage accent colors (dark-theme tuned)
     stage_colors = {
-        "New": "#95a5a6", "Contacted": "#2E5090", "Qualified": "#8e44ad",
-        "Proposal": "#f39c12", "Won": "#27ae60", "Lost": "#e74c3c",
+        "New": "#8b90a0", "Contacted": "#5b7cfa", "Qualified": "#a974f5",
+        "Proposal": "#f5a623", "Won": "#2bd4a0", "Lost": "#ff6b6b",
     }
 
     # Stage filter buttons
-    filter_btns = "<a href='/leads' class='filter-btn' style='{}'>All</a>".format(
-        "background:#1F3864;color:white;" if filter == "all" else ""
+    filter_btns = "<a href='/leads' class='filter-btn {}'>All</a>".format(
+        "active" if filter == "all" else ""
     )
     for s in LEAD_STAGES:
-        active = "background:#1F3864;color:white;" if filter == s else ""
-        filter_btns += f"<a href='/leads?filter={s}' class='filter-btn' style='{active}'>{s}</a>"
+        active = "active" if filter == s else ""
+        filter_btns += f"<a href='/leads?filter={s}' class='filter-btn {active}'>{s}</a>"
 
     rows_html = ""
     for l in leads:
         lid, lname, lcontact, lvalue, lstatus, lsource = l
-        color = stage_colors.get(lstatus, "#999")
+        color = stage_colors.get(lstatus, "#8b90a0")
         # status dropdown that submits on change
         opts = "".join(
             f"<option value='{s}'{' selected' if s == lstatus else ''}>{s}</option>"
@@ -259,14 +475,14 @@ def leads_page(filter: str = "all", email: str = Depends(require_auth)):
         )
         rows_html += f"""
         <tr>
-            <td><strong>{lname}</strong></td>
-            <td>{lcontact or '—'}</td>
-            <td>{lsource or '—'}</td>
-            <td>${float(lvalue or 0):,.0f}</td>
+            <td><strong style='color:#e8eaf0;'>{lname}</strong></td>
+            <td style='color:#8b90a0;'>{lcontact or '—'}</td>
+            <td style='color:#8b90a0;'>{lsource or '—'}</td>
+            <td style='color:#e8eaf0;'>${float(lvalue or 0):,.0f}</td>
             <td>
                 <form method='post' action='/leads/{lid}/status' style='display:inline'>
                     <select name='status' onchange='this.form.submit()'
-                        style='border:none;background:{color};color:white;padding:5px 10px;border-radius:12px;font-size:13px;cursor:pointer;'>
+                        style='font-family:inherit;border:none;background:{color}1f;color:{color};padding:6px 12px;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;'>
                         {opts}
                     </select>
                 </form>
@@ -274,68 +490,29 @@ def leads_page(filter: str = "all", email: str = Depends(require_auth)):
             <td>
                 <form method='post' action='/leads/{lid}/delete' style='display:inline'
                     onsubmit='return confirm("Delete this lead?");'>
-                    <button type='submit' style='background:#e74c3c;color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;'>
-                        Delete
+                    <button type='submit' class='btn btn-delete'>
+                        <i class='ti ti-trash'></i> Delete
                     </button>
                 </form>
             </td>
         </tr>"""
 
     if not rows_html:
-        rows_html = "<tr><td colspan='6' style='color:#999;text-align:center;padding:24px;'>No leads yet — add one above.</td></tr>"
+        rows_html = "<tr><td colspan='6' class='empty'>No leads yet — add one above.</td></tr>"
 
     add_options = "".join(f"<option value='{s}'>{s}</option>" for s in LEAD_STAGES)
 
     return f"""
     <html>
-    <head>
-        <title>Leads — Rowan</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 0; background: #f5f7fa; }}
-            .header {{ background: #1F3864; color: white; padding: 20px 40px; display:flex; justify-content:space-between; align-items:center; }}
-            .header h1 {{ margin: 0; font-size: 24px; }}
-            .header nav a {{ color: white; margin-left: 20px; text-decoration: none; font-size: 14px; opacity: 0.85; }}
-            .header nav a:hover {{ opacity: 1; }}
-            .header .user {{ font-size: 13px; opacity: 0.85; }}
-            .container {{ padding: 30px 40px; }}
-            .section-title {{ font-size: 20px; font-weight: bold; color: #1F3864; margin: 30px 0 15px; }}
-            .cards {{ display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 10px; }}
-            .stat-card {{ background: white; border-radius: 10px; padding: 20px 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); text-align:center; min-width: 140px; }}
-            .stat-card .number {{ font-size: 32px; font-weight: bold; color: #1F3864; }}
-            .stat-card .label {{ color: #666; font-size: 14px; }}
-            table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
-            th {{ background: #2E5090; color: white; padding: 12px 16px; text-align: left; font-size: 14px; }}
-            td {{ padding: 12px 16px; border-bottom: 1px solid #f0f0f0; font-size: 14px; }}
-            tr:last-child td {{ border-bottom: none; }}
-            .filter-btn {{ padding: 8px 18px; border-radius: 20px; border: 2px solid #1F3864; background: white; color: #1F3864; cursor: pointer; font-size: 13px; text-decoration: none; }}
-            .filters {{ display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }}
-            .add-form {{ background: white; border-radius: 10px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }}
-            .add-form label {{ display:block; font-size:12px; color:#666; margin-bottom:4px; }}
-            .add-form input, .add-form select {{ padding: 9px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }}
-            .add-form button {{ background:#1F3864;color:white;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600; }}
-        </style>
-    </head>
+    {page_head("Leads — Rowan")}
     <body>
-        <div class='header'>
-            <h1>🤖 Rowan — Leads</h1>
-            <nav>
-                <a href='/'>Dashboard</a>
-                <a href='/leads'>Leads</a>
-                <a href='/chat'>Chat</a>
-            </nav>
-            <div class='user'>
-                Signed in as {email}
-                <form method='post' action='/logout' style='display:inline'>
-                    <button type='submit' style='background:none;border:none;color:white;cursor:pointer;text-decoration:underline;font-size:13px;'>Sign out</button>
-                </form>
-            </div>
-        </div>
+        {header_html(email, "leads")}
         <div class='container'>
             <div class='section-title'>Pipeline</div>
             <div class='cards'>
                 <div class='stat-card'><div class='number'>{total}</div><div class='label'>Total Leads</div></div>
                 <div class='stat-card'><div class='number'>${float(open_val):,.0f}</div><div class='label'>Open Pipeline</div></div>
-                <div class='stat-card'><div class='number'>${float(won_val):,.0f}</div><div class='label'>Won Value</div></div>
+                <div class='stat-card'><div class='number green'>${float(won_val):,.0f}</div><div class='label'>Won Value</div></div>
                 <div class='stat-card'><div class='number'>{win_rate}%</div><div class='label'>Win Rate</div></div>
             </div>
 
@@ -396,99 +573,59 @@ def home(filter: str = "open", email: str = Depends(require_auth)):
     cur.close()
     conn.close()
 
-    rag_colors = {"green": "#2ecc71", "amber": "#f39c12", "red": "#e74c3c"}
+    # RAG colors (dark-theme tuned)
+    rag_colors = {"green": "#2bd4a0", "amber": "#f5a623", "red": "#ff6b6b"}
 
     projects_html = ""
     for p in projects:
-        color = rag_colors.get(p[3], "#999")
+        color = rag_colors.get(p[3], "#8b90a0")
+        rag_label = str(p[3]).upper() if p[3] else "NO STATUS"
         projects_html += f"""
         <div class='card'>
+            <div class='rag-bar' style='background:{color};'></div>
             <h3>{p[1]}</h3>
-            <span style='background:{color};color:white;padding:4px 12px;border-radius:12px;font-size:14px;'>
-                {str(p[3]).upper() if p[3] else 'NO STATUS'}
-            </span>
-            <p style='color:#666;margin-top:8px;'>Status: {p[2]}</p>
+            <span class='rag-pill' style='color:{color};background:{color}1f;'>● {rag_label}</span>
+            <p class='meta'>{p[2]}</p>
         </div>"""
 
     tasks_html = ""
     for t in tasks:
-        priority_color = {"high": "#e74c3c", "medium": "#f39c12", "low": "#2ecc71"}.get(t[3], "#999")
+        priority_color = {"high": "#ff6b6b", "medium": "#f5a623", "low": "#2bd4a0"}.get(t[3], "#8b90a0")
         is_complete = t[4] == "complete"
-        row_style = "background:#f9fff9;" if is_complete else ""
+        row_class = "complete" if is_complete else ""
         action_btn = f"""
             <form method='post' action='/reopen/{t[0]}' style='display:inline'>
-                <button type='submit' style='background:#95a5a6;color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;'>
-                    Reopen
+                <button type='submit' class='btn btn-reopen'>
+                    <i class='ti ti-rotate'></i> Reopen
                 </button>
             </form>""" if is_complete else f"""
             <form method='post' action='/complete/{t[0]}' style='display:inline'>
-                <button type='submit' style='background:#2ecc71;color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;'>
-                    ✓ Done
+                <button type='submit' class='btn btn-done'>
+                    <i class='ti ti-check'></i> Done
                 </button>
             </form>"""
 
-        task_text = f"<s style='color:#999'>{t[1]}</s>" if is_complete else t[1]
+        task_text = f"<s>{t[1]}</s>" if is_complete else t[1]
+        prio_text = t[3] or "—"
+        prio_html = f"<span class='prio' style='color:{priority_color};'>● {prio_text}</span>" if t[3] else "<span style='color:#565a6b;'>—</span>"
         tasks_html += f"""
-        <tr style='{row_style}'>
+        <tr class='{row_class}'>
             <td>{task_text}</td>
-            <td>{t[2] if t[2] else '—'}</td>
-            <td><span style='color:{priority_color};font-weight:bold;'>{t[3] or '—'}</span></td>
-            <td>{t[5] or 'No project'}</td>
+            <td style='color:#6b7080;'>{t[2] if t[2] else '—'}</td>
+            <td>{prio_html}</td>
+            <td style='color:#6b7080;'>{t[5] or 'No project'}</td>
             <td>{action_btn}</td>
         </tr>"""
 
-    active_style = "background:#1F3864;color:white;"
-    all_style = ""
-    complete_style = ""
-    if filter == "all":
-        all_style = "background:#1F3864;color:white;"
-        active_style = ""
-    elif filter == "complete":
-        complete_style = "background:#1F3864;color:white;"
-        active_style = ""
+    open_cls = "active" if filter == "open" else ""
+    complete_cls = "active" if filter == "complete" else ""
+    all_cls = "active" if filter == "all" else ""
 
     return f"""
     <html>
-    <head>
-        <title>Rowan Dashboard</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 0; background: #f5f7fa; }}
-            .header {{ background: #1F3864; color: white; padding: 20px 40px; display:flex; justify-content:space-between; align-items:center; }}
-            .header h1 {{ margin: 0; font-size: 24px; }}
-            .header nav a {{ color: white; margin-left: 20px; text-decoration: none; font-size: 14px; opacity: 0.85; }}
-            .header nav a:hover {{ opacity: 1; }}
-            .header .user {{ font-size: 13px; opacity: 0.85; }}
-            .container {{ padding: 30px 40px; }}
-            .section-title {{ font-size: 20px; font-weight: bold; color: #1F3864; margin: 30px 0 15px; }}
-            .cards {{ display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 10px; }}
-            .card {{ background: white; border-radius: 10px; padding: 20px; min-width: 200px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
-            .card h3 {{ margin: 0 0 10px; color: #1F3864; }}
-            .stat-card {{ background: white; border-radius: 10px; padding: 20px 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); text-align:center; }}
-            .stat-card .number {{ font-size: 36px; font-weight: bold; color: #1F3864; }}
-            .stat-card .label {{ color: #666; font-size: 14px; }}
-            table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
-            th {{ background: #2E5090; color: white; padding: 12px 16px; text-align: left; font-size: 14px; }}
-            td {{ padding: 12px 16px; border-bottom: 1px solid #f0f0f0; font-size: 14px; }}
-            tr:last-child td {{ border-bottom: none; }}
-            .filter-btn {{ padding: 8px 20px; border-radius: 20px; border: 2px solid #1F3864; background: white; color: #1F3864; cursor: pointer; font-size: 14px; text-decoration: none; }}
-            .filters {{ display: flex; gap: 10px; margin-bottom: 20px; }}
-        </style>
-    </head>
+    {page_head("Rowan Dashboard")}
     <body>
-        <div class='header'>
-            <h1>🤖 Rowan — Miami Coastline Management</h1>
-            <nav>
-                <a href='/'>Dashboard</a>
-                <a href='/leads'>Leads</a>
-                <a href='/chat'>Chat</a>
-            </nav>
-            <div class='user'>
-                Signed in as {email}
-                <form method='post' action='/logout' style='display:inline'>
-                    <button type='submit' style='background:none;border:none;color:white;cursor:pointer;text-decoration:underline;font-size:13px;'>Sign out</button>
-                </form>
-            </div>
-        </div>
+        {header_html(email, "dashboard")}
         <div class='container'>
             <div class='section-title'>Projects</div>
             <div class='cards'>
@@ -498,15 +635,15 @@ def home(filter: str = "open", email: str = Depends(require_auth)):
                     <div class='label'>Open Tasks</div>
                 </div>
                 <div class='stat-card'>
-                    <div class='number'>{complete_count}</div>
+                    <div class='number green'>{complete_count}</div>
                     <div class='label'>Completed</div>
                 </div>
             </div>
             <div class='section-title'>Tasks</div>
             <div class='filters'>
-                <a href='/?filter=open' class='filter-btn' style='{active_style}'>Open</a>
-                <a href='/?filter=complete' class='filter-btn' style='{complete_style}'>Completed</a>
-                <a href='/?filter=all' class='filter-btn' style='{all_style}'>All</a>
+                <a href='/?filter=open' class='filter-btn {open_cls}'>Open</a>
+                <a href='/?filter=complete' class='filter-btn {complete_cls}'>Completed</a>
+                <a href='/?filter=all' class='filter-btn {all_cls}'>All</a>
             </div>
             <table>
                 <tr>
