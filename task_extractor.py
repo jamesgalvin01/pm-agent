@@ -11,7 +11,7 @@ client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 def extract_tasks_from_email(email_content):
     response = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=1000,
+        max_tokens=4000,
         messages=[
             {
                 "role": "user",
@@ -23,11 +23,20 @@ def extract_tasks_from_email(email_content):
     clean = raw.replace("```json", "").replace("```", "").strip()
     start = clean.find('[')
     end = clean.rfind(']') + 1
-    return json.loads(clean[start:end])
 
-test_email = "James please send the client proposal by Friday. Maria needs to review the budget spreadsheet by tomorrow. John to schedule the contractor call next week."
+    if start == -1 or end == 0:
+        print("No JSON array found in response; skipping this email.")
+        return []
 
-tasks = extract_tasks_from_email(test_email)
-print("Extracted tasks:")
-print(json.dumps(tasks, indent=2))
-save_tasks(tasks)
+    try:
+        return json.loads(clean[start:end])
+    except json.JSONDecodeError as e:
+        print("Failed to parse tasks from email; skipping. Error:", e)
+        return []
+
+if __name__ == "__main__":
+    test_email = "James please send the client proposal by Friday. Maria needs to review the budget spreadsheet by tomorrow. John to schedule the contractor call next week."
+    tasks = extract_tasks_from_email(test_email)
+    print("Extracted tasks:")
+    print(json.dumps(tasks, indent=2))
+    save_tasks(tasks)
