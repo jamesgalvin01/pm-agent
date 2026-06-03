@@ -15,6 +15,7 @@ from auth import (
 )
 from mailer import send_magic_link_email
 from chat import router as chat_router
+from sms_webhook import router as sms_router
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 
@@ -22,6 +23,7 @@ app = FastAPI()
 
 # Mount chat routes (/chat page + /api/chat/* JSON endpoints)
 app.include_router(chat_router)
+app.include_router(sms_router)
 
 
 # ============================================================
