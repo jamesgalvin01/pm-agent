@@ -62,4 +62,5 @@ def scan_outlook_for_tasks(project_id):
                 conn.close()
                 print(f"Saved {len(tasks)} tasks from email.")
 
-scan_outlook_for_tasks(1)
+if __name__ == "__main__":
+    scan_outlook_for_tasks(1)
