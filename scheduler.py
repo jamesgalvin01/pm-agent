@@ -7,6 +7,7 @@ from status_report import run_status_report, run_pipeline_report
 from gmail_reader import scan_gmail_for_tasks
 from outlook_reader import scan_outlook_for_tasks
 from rowan_nudges import run_nudge_pass
+from linkedin_drafter import run_linkedin_draft
 from db import get_connection
 
 
@@ -58,6 +59,18 @@ def run_weekly_jobs():
     print("Weekly jobs complete.")
 
 
+def run_linkedin_draft_job():
+    if not should_run_job("linkedin_draft"):
+        print("LinkedIn draft already ran today, skipping.")
+        return
+    print("Running LinkedIn draft job...")
+    try:
+        run_linkedin_draft()
+        print("LinkedIn draft sent.")
+    except Exception as e:
+        print(f"LinkedIn draft failed: {e}")
+
+
 def run_nudges_job():
     """
     Proactive nudge pass. Runs at 12/16/20 UTC, Monday-Friday only
@@ -78,6 +91,7 @@ def run_nudges_job():
 # ----- Schedule -----
 schedule.every().day.at("08:00").do(run_daily_jobs)
 schedule.every().monday.at("08:00").do(run_weekly_jobs)
+schedule.every().day.at("09:00").do(run_linkedin_draft_job)
 
 # Rowan proactive nudges — business-hours, M-F (weekend skip is inside the job)
 schedule.every().day.at("08:00").do(run_nudges_job)
@@ -90,6 +104,7 @@ print("- Reminders will run every day at 8am.")
 print("- Status reports will run every Monday at 8am.")
 print("- Rowan nudges run at 08:00 / 12:00 / 16:00 Eastern, weekdays only.")
 print("Press Ctrl+C to stop.")
+print("- LinkedIn draft email sent every day at 9am.")
 
 while True:
     schedule.run_pending()
