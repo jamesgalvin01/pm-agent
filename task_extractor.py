@@ -15,7 +15,7 @@ def extract_tasks_from_email(email_content):
         messages=[
             {
                 "role": "user",
-                "content": "Extract all action items from this email. Return ONLY a JSON array. Each item should have: task, assignee, due date (in YYYY-MM-DD format only, or null if unclear), priority (high, medium, or low). Email: " + email_content
+                "content": "Extract all action items from this email. Return ONLY a JSON array. Each item should have: task, assignee, due_date (in YYYY-MM-DD format only, or null if unclear), priority (high, medium, or low). Email: " + email_content
             }
         ]
     )
