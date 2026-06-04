@@ -84,7 +84,12 @@ Heads up — #47 (Grotto plumbing inspection) is already 3 days overdue."
 User: "Mark task 47 as done."
 You: "I'll mark task 47 (Grotto plumbing inspection) as complete. Confirm?"
 User: "yes"
-You: [call mark_task_complete] "Done — task 47 is now complete."
+You: [call mark_task_complete with task_ids=[47]] "Done — task 47 is now complete."
+
+User: "Close the drywall submittal, the OCIP email, and the LEED task."
+You: [if needed, call list_open_tasks to resolve the descriptions to IDs] "I'll mark these 3 tasks complete: 12 (drywall submittal), 15 (OCIP email), 23 (LEED plan date). Confirm?"
+User: "yes"
+You: [call mark_task_complete with task_ids=[12,15,23]] "Done — closed 3 tasks: 12, 15, 23."
 """
 
 
@@ -142,15 +147,19 @@ TOOLS = [
     },
 
     # ---------- WRITE TOOLS ----------
-    {
+{
         "name": "mark_task_complete",
-        "description": "Mark a single task as complete. REQUIRES prior user confirmation in this conversation — do not call this on the same turn you propose it.",
+        "description": "Mark one or more tasks as complete. Pass a list of task IDs — one ID to close a single task, or several to close multiple at once. REQUIRES prior user confirmation in this conversation — do not call this on the same turn you propose it.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "task_id": {"type": "integer", "description": "The task ID."},
+                "task_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "List of task IDs to mark complete. For a single task, pass a list with one ID.",
+                },
             },
-            "required": ["task_id"],
+            "required": ["task_ids"],
         },
     },
     {
@@ -374,17 +383,29 @@ def tool_list_people(args: dict) -> dict:
 
 
 def tool_mark_task_complete(args: dict) -> dict:
-    task_id = args["task_id"]
+    task_ids = args.get("task_ids") or []
+    if not task_ids:
+        return {"error": "No task_ids provided."}
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("UPDATE tasks SET status = 'complete' WHERE id = %s RETURNING id, description", (task_id,))
-    row = cur.fetchone()
+    completed = []
+    not_found = []
+    for tid in task_ids:
+        cur.execute("UPDATE tasks SET status = 'complete' WHERE id = %s RETURNING id, description", (tid,))
+        row = cur.fetchone()
+        if row:
+            completed.append({"task_id": row[0], "description": row[1]})
+        else:
+            not_found.append(tid)
     conn.commit()
     cur.close()
     conn.close()
-    if not row:
-        return {"error": f"No task with id {task_id}"}
-    return {"ok": True, "task_id": row[0], "description": row[1]}
+    return {
+        "ok": True,
+        "completed_count": len(completed),
+        "completed": completed,
+        "not_found": not_found,
+    }
 
 
 def tool_reopen_task(args: dict) -> dict:
