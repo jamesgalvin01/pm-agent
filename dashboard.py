@@ -582,6 +582,15 @@ def emails_scan(email: str = Depends(require_auth)):
     except Exception as e:
         print(f"[dashboard] Inbox scan failed: {e}")
         return RedirectResponse(url=f"/emails?err={quote_plus(str(e)[:200])}", status_code=303)
+
+    # Behave like the scheduled pass: push the first draft to James for
+    # approval. A messaging failure must not fail the scan itself.
+    try:
+        from approvals import notify_next_email_draft
+        notify_next_email_draft()
+    except Exception as e:
+        print(f"[dashboard] Could not send the first draft for approval: {e}")
+
     return RedirectResponse(url="/emails", status_code=303)
 
 
