@@ -20,6 +20,7 @@ from email_replies import run_reply_draft_pass, ensure_schema as ensure_email_sc
 from outlook_mail import send_reply
 from chat import router as chat_router
 from sms_webhook import router as sms_router
+from telegram_bot import router as telegram_router
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 
@@ -28,6 +29,7 @@ app = FastAPI()
 # Mount chat routes (/chat page + /api/chat/* JSON endpoints)
 app.include_router(chat_router)
 app.include_router(sms_router)
+app.include_router(telegram_router)
 
 
 # ============================================================

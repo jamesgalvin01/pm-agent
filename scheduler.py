@@ -144,15 +144,15 @@ def run_email_reply_job():
     stats = run_reply_draft_pass()
     log(f"Email reply pass: {stats}")
 
-    # Text James the first draft for approval. No-op until SMS_APPROVALS_ENABLED
-    # is set (waiting on the Twilio 10DLC campaign). The queue advances itself
-    # from the webhook as he answers each one.
+    # Send James the first draft for approval on whichever channel is live
+    # (APPROVAL_CHANNEL). The queue advances itself from the webhook as he
+    # answers each one. No-op when APPROVAL_CHANNEL is off.
     try:
-        from sms_webhook import notify_next_email_draft
+        from approvals import notify_next_email_draft
         if notify_next_email_draft():
-            log("Texted the first draft for approval.")
+            log("Sent the first draft for approval.")
     except Exception:
-        report_failure("email draft SMS notify")
+        report_failure("email draft approval notify")
 
 
 # ----- Schedule -----
