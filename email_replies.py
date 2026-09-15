@@ -78,6 +78,10 @@ def ensure_schema():
         CREATE INDEX IF NOT EXISTS idx_email_drafts_status
         ON email_drafts (status, received_at DESC)
     """)
+    # Added Sep 2026 for the SMS approval loop: when this draft was texted to
+    # James, so the queue never texts the same draft twice.
+    cur.execute("ALTER TABLE email_drafts ADD COLUMN IF NOT EXISTS texted_at TIMESTAMPTZ")
+    cur.execute("ALTER TABLE email_drafts ADD COLUMN IF NOT EXISTS approved_via TEXT")
     conn.commit()
     cur.close()
     conn.close()

@@ -17,6 +17,7 @@ from twilio.request_validator import RequestValidator
 from twilio.rest import Client as TwilioClient
 
 from db import get_connection
+from outlook_mail import send_reply
 
 # ---- Config from environment (set in Railway pm_agent service) ----
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
@@ -25,6 +26,19 @@ TWILIO_NUMBER = os.getenv("TWILIO_NUMBER", "")
 MY_PHONE = os.getenv("MY_PHONE", "")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 EMAIL_FROM = os.getenv("EMAIL_FROM", "Rowan <rowan@miami-coastline.com>")
+
+# Email-reply approvals over SMS. OFF until the Twilio A2P 10DLC campaign is
+# approved — set SMS_APPROVALS_ENABLED=true in Railway to switch it on.
+SMS_APPROVALS_ENABLED = os.getenv("SMS_APPROVALS_ENABLED", "").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+
+# Longest draft body we put in a text before truncating.
+MAX_SMS_DRAFT_CHARS = 800
+
+# How long a pending question stays answerable, by type.
+PENDING_TTL_SECONDS = {"send": 900, "email_reply": 43200}   # 15 minutes / 12 hours
+DEFAULT_PENDING_TTL = 900
 
 anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 resend.api_key = os.getenv("RESEND_API_KEY")
@@ -82,9 +96,10 @@ def _get_pending():
     conn.close()
     if not row or not row[0]:
         return None
-    # Expire pending actions older than 15 minutes
+    action = row[0] or {}
+    ttl = PENDING_TTL_SECONDS.get(action.get("type"), DEFAULT_PENDING_TTL)
     age = (datetime.now(row[1].tzinfo) - row[1]).total_seconds()
-    if age > 900:
+    if age > ttl:
         _clear_pending()
         return None
     return row[0]
@@ -197,6 +212,159 @@ def _handle_add_task(task_text):
     return f"Added task: {task_text}"
 
 
+# ============================================================
+# EMAIL REPLY APPROVALS OVER SMS
+# ============================================================
+# Rowan drafts a reply (email_replies.py), texts it to James, and sends it
+# only when he answers SEND. One open question at a time: the next draft is
+# texted as soon as the current one is resolved.
+
+def _draft_row(draft_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT graph_message_id, draft_body, from_name, from_email, subject, status
+          FROM email_drafts WHERE id = %s
+    """, (draft_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row
+
+
+def _next_untexted_draft():
+    """Highest urgency first, then oldest, so nothing starves."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, from_name, from_email, subject, draft_body, urgency
+          FROM email_drafts
+         WHERE status = 'pending'
+           AND draft_body IS NOT NULL
+           AND texted_at IS NULL
+         ORDER BY (urgency = 'high') DESC, received_at ASC
+         LIMIT 1
+    """)
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row
+
+
+def _draft_update(sql, params):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(sql, params)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def _shorten(text: str) -> str:
+    text = (text or "").strip()
+    if len(text) <= MAX_SMS_DRAFT_CHARS:
+        return text
+    return text[:MAX_SMS_DRAFT_CHARS].rstrip() + "... (truncated - full text on /emails)"
+
+
+def notify_next_email_draft() -> bool:
+    """Text James the next unreviewed draft. Returns True if a text went out."""
+    if not SMS_APPROVALS_ENABLED:
+        return False
+    if _get_pending():
+        # Something is already awaiting his answer; don't stack questions.
+        return False
+    row = _next_untexted_draft()
+    if not row:
+        return False
+
+    draft_id, fname, femail, subject, draft_body, urgency = row
+    who = fname or femail or "unknown sender"
+    flag = "[urgent] " if (urgency or "").lower() == "high" else ""
+
+    _set_pending({"type": "email_reply", "draft_id": draft_id})
+    _draft_update("UPDATE email_drafts SET texted_at = NOW() WHERE id = %s", (draft_id,))
+    _send_sms_reply(
+        f"{flag}Reply to {who} - \"{subject or '(no subject)'}\":\n\n"
+        f"{_shorten(draft_body)}\n\n"
+        "SEND to send it, NO to discard, LATER to leave it on the dashboard, "
+        "or text a rewrite."
+    )
+    return True
+
+
+def _handle_email_reply_pending(pending, body: str, upper: str) -> None:
+    draft_id = pending.get("draft_id")
+    row = _draft_row(draft_id)
+    if not row:
+        _clear_pending()
+        _send_sms_reply("That draft is gone. Nothing was sent.")
+        return
+
+    graph_message_id, draft_body, fname, femail, subject, status = row
+    who = fname or femail or "them"
+
+    if status != "pending":
+        # Already handled on the dashboard while the text was outstanding.
+        _clear_pending()
+        _send_sms_reply(f"The reply to {who} was already handled. Nothing sent.")
+        notify_next_email_draft()
+        return
+
+    if upper in ("SEND", "YES", "CONFIRM", "OK", "GO", "APPROVE"):
+        if not (draft_body or "").strip():
+            _send_sms_reply("That draft is empty. Text me the reply you want to send.")
+            return
+        try:
+            sent_id = send_reply(graph_message_id, draft_body)
+        except Exception as e:
+            _draft_update(
+                "UPDATE email_drafts SET error = %s WHERE id = %s",
+                (str(e)[:500], draft_id),
+            )
+            _clear_pending()
+            _send_sms_reply(f"Send failed: {str(e)[:120]} It's still on /emails.")
+            return
+        _draft_update("""
+            UPDATE email_drafts
+               SET status = 'sent', sent_message_id = %s, decided_at = NOW(),
+                   approved_via = 'sms', error = NULL
+             WHERE id = %s
+        """, (sent_id, draft_id))
+        _clear_pending()
+        _send_sms_reply(f"Sent to {who}.")
+        notify_next_email_draft()
+        return
+
+    if upper in ("NO", "CANCEL", "DISCARD", "DENY", "STOP"):
+        _draft_update("""
+            UPDATE email_drafts
+               SET status = 'discarded', decided_at = NOW(), approved_via = 'sms'
+             WHERE id = %s
+        """, (draft_id,))
+        _clear_pending()
+        _send_sms_reply(f"Discarded the reply to {who}. Nothing was sent.")
+        notify_next_email_draft()
+        return
+
+    if upper in ("LATER", "SKIP", "HOLD"):
+        _clear_pending()
+        _send_sms_reply(f"Left the reply to {who} on the dashboard.")
+        notify_next_email_draft()
+        return
+
+    # Anything else is a rewrite. Replace the body, show it back, wait for SEND.
+    revised = body.strip()
+    _draft_update(
+        "UPDATE email_drafts SET draft_body = %s WHERE id = %s", (revised, draft_id)
+    )
+    _set_pending({"type": "email_reply", "draft_id": draft_id})   # resets the clock
+    _send_sms_reply(
+        f"Updated the reply to {who}:\n\n{_shorten(revised)}\n\n"
+        "SEND to send it, NO to discard."
+    )
+
+
 # ---- The webhook ----
 @router.post("/sms")
 async def sms_webhook(request: Request):
@@ -220,6 +388,13 @@ async def sms_webhook(request: Request):
     # Confirmation path: did James reply SEND / YES / CANCEL?
     upper = body.upper()
     pending = _get_pending()
+
+    # Email reply approvals have their own vocabulary (SEND / NO / LATER /
+    # rewrite) and must not fall through to intent parsing.
+    if pending and pending.get("type") == "email_reply":
+        _handle_email_reply_pending(pending, body, upper)
+        return Response(status_code=204)
+
     if pending:
         if upper in ("SEND", "YES", "CONFIRM"):
             result = _execute_pending(pending)
