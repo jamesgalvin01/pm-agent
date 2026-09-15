@@ -135,15 +135,16 @@ schedule.every().day.at("08:00").do(safe("daily jobs", run_daily_jobs))
 schedule.every().monday.at("08:00").do(safe("weekly jobs", run_weekly_jobs))
 schedule.every().day.at("09:00").do(safe("LinkedIn draft", run_linkedin_draft_job))
 
-# Rowan proactive nudges — once daily at noon, M-F (weekend skip is inside the job)
-schedule.every().day.at("12:00").do(safe("nudge pass", run_nudges_job))
+# Rowan proactive nudges — DISABLED (James, Sep 2026: noon nudge was too much).
+# The job is still defined above; re-enable by uncommenting the line below.
+# schedule.every().day.at("12:00").do(safe("nudge pass", run_nudges_job))
 
 log("Scheduler started.")
 log("- Gmail and Outlook scanned every day at 8am.")
 log("- Reminders run every day at 8am.")
 log("- Status reports run every Monday at 8am.")
 log("- LinkedIn draft email sent every day at 9am.")
-log("- Rowan nudges run at 12:00 Eastern, weekdays only.")
+log("- Rowan nudges: disabled.")
 check_database()
 
 last_heartbeat = time.monotonic()
