@@ -4,3 +4,4 @@ credentials.json
 venv/
 __pycache__/
 *.pyc
+.telegram-railway-vars

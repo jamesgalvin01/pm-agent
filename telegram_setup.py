@@ -15,6 +15,7 @@ variables to set on Railway.
 Note: the bot token is never printed in an error. Telegram puts it in the URL,
 so raw exceptions would leak it.
 """
+import io
 import os
 import secrets
 import sys
@@ -129,13 +130,26 @@ def main():
         print(f"Could not send a test message: {_scrub(hello.get('description'))}")
         print("(If this says 'chat not found', the chat id is wrong.)")
 
+    # Written to a file rather than printed: these are secrets, and anything
+    # on screen tends to get copied into a chat window by accident.
+    out = ".telegram-railway-vars"
+    with io.open(out, "w", encoding="utf-8") as f:
+        f.write(f"TELEGRAM_BOT_TOKEN={BOT_TOKEN}\n")
+        f.write(f"TELEGRAM_CHAT_ID={chat_id}\n")
+        f.write(f"TELEGRAM_WEBHOOK_SECRET={secret}\n")
+        f.write("APPROVAL_CHANNEL=telegram\n")
+    os.chmod(out, 0o600)
+
     print("\n" + "=" * 62)
-    print("Set these on the Railway pm-agent service, then redeploy:\n")
-    print(f"  TELEGRAM_BOT_TOKEN={BOT_TOKEN}")
+    print(f"Railway variables written to: {os.path.abspath(out)}")
+    print("Open it, copy the four lines into the pm-agent service, redeploy.")
+    print("Also set APPROVAL_CHANNEL=telegram on the worker service.\n")
+    print("  TELEGRAM_BOT_TOKEN=" + BOT_TOKEN[:12] + "*" * 20)
     print(f"  TELEGRAM_CHAT_ID={chat_id}")
-    print(f"  TELEGRAM_WEBHOOK_SECRET={secret}")
+    print("  TELEGRAM_WEBHOOK_SECRET=" + secret[:6] + "*" * 20)
     print("  APPROVAL_CHANNEL=telegram")
-    print("\nAlso set APPROVAL_CHANNEL=telegram on the worker service.")
+    print("\nThe file is gitignored and readable only by you. Delete it once")
+    print("the variables are in Railway:  rm .telegram-railway-vars")
     print("=" * 62)
 
 
