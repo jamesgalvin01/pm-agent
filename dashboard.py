@@ -1,4 +1,6 @@
 import os
+import html as _html
+from urllib.parse import quote_plus
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 import uvicorn
@@ -14,6 +16,8 @@ from auth import (
     ALLOWED_EMAIL,
 )
 from mailer import send_magic_link_email
+from email_replies import run_reply_draft_pass, ensure_schema as ensure_email_schema
+from outlook_mail import send_reply
 from chat import router as chat_router
 from sms_webhook import router as sms_router
 
@@ -203,6 +207,7 @@ def header_html(email: str, active: str) -> str:
             <nav>
                 <a href='/' class='{cls("dashboard")}'>Dashboard</a>
                 <a href='/leads' class='{cls("leads")}'>Leads</a>
+                <a href='/emails' class='{cls("emails")}'>Email</a>
                 <a href='/chat' class='{cls("chat")}'>Chat</a>
             </nav>
             <div class='user'>
@@ -535,6 +540,267 @@ def leads_page(filter: str = "all", email: str = Depends(require_auth)):
                     <th>Name</th><th>Contact</th><th>Source</th><th>Value</th><th>Stage</th><th></th>
                 </tr>
                 {rows_html}
+            </table>
+        </div>
+    </body>
+    </html>"""
+
+
+# ============================================================
+# EMAIL REPLY APPROVAL ROUTES
+# ============================================================
+# Rowan drafts replies to inbox mail; nothing is sent until James
+# clicks Approve & Send on this page.
+
+URGENCY_COLORS = {"high": "#ff6b6b", "normal": "#5b7cfa", "low": "#8b90a0"}
+
+
+def _fetch_drafts(status: str, limit: int = 50):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT id, from_name, from_email, subject, received_at, body_preview,
+                  draft_body, rationale, urgency, status, decided_at, error
+             FROM email_drafts
+            WHERE status = %s
+            ORDER BY received_at DESC NULLS LAST
+            LIMIT %s""",
+        (status, limit),
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return rows
+
+
+@app.post("/emails/scan")
+def emails_scan(email: str = Depends(require_auth)):
+    try:
+        run_reply_draft_pass()
+    except Exception as e:
+        print(f"[dashboard] Inbox scan failed: {e}")
+        return RedirectResponse(url=f"/emails?err={quote_plus(str(e)[:200])}", status_code=303)
+    return RedirectResponse(url="/emails", status_code=303)
+
+
+@app.post("/emails/{draft_id}/send")
+def emails_send(
+    draft_id: int,
+    body: str = Form(...),
+    reply_all: str = Form(""),
+    email: str = Depends(require_auth),
+):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT graph_message_id, status FROM email_drafts WHERE id = %s",
+        (draft_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Draft not found")
+
+    graph_message_id, status = row
+    if status != "pending":
+        cur.close()
+        conn.close()
+        return RedirectResponse(url="/emails", status_code=303)
+
+    body = (body or "").strip()
+    if not body:
+        cur.close()
+        conn.close()
+        return RedirectResponse(
+            url="/emails?err=" + quote_plus("Draft was empty — nothing sent."),
+            status_code=303,
+        )
+
+    try:
+        sent_id = send_reply(graph_message_id, body, reply_all=bool(reply_all))
+    except Exception as e:
+        cur.execute(
+            "UPDATE email_drafts SET draft_body = %s, error = %s WHERE id = %s",
+            (body, str(e)[:500], draft_id),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return RedirectResponse(
+            url="/emails?err=" + quote_plus(f"Send failed: {str(e)[:180]}"),
+            status_code=303,
+        )
+
+    cur.execute(
+        """UPDATE email_drafts
+              SET status = 'sent', draft_body = %s, sent_message_id = %s,
+                  decided_at = NOW(), error = NULL
+            WHERE id = %s""",
+        (body, sent_id, draft_id),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+    return RedirectResponse(url="/emails?ok=1", status_code=303)
+
+
+@app.post("/emails/{draft_id}/discard")
+def emails_discard(draft_id: int, email: str = Depends(require_auth)):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE email_drafts SET status = 'discarded', decided_at = NOW() WHERE id = %s",
+        (draft_id,),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+    return RedirectResponse(url="/emails", status_code=303)
+
+
+@app.get("/emails", response_class=HTMLResponse)
+def emails_page(ok: int = 0, err: str = "", email: str = Depends(require_auth)):
+    try:
+        ensure_email_schema()
+    except Exception as e:
+        print(f"[dashboard] email_drafts schema check failed: {e}")
+
+    pending = _fetch_drafts("pending")
+    recent_sent = _fetch_drafts("sent", limit=10)
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+            COUNT(*) FILTER (WHERE status = 'pending'),
+            COUNT(*) FILTER (WHERE status = 'sent' AND decided_at::date = CURRENT_DATE),
+            COUNT(*) FILTER (WHERE status = 'skipped' AND created_at::date = CURRENT_DATE)
+        FROM email_drafts
+    """)
+    n_pending, n_sent_today, n_skipped_today = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    banner = ""
+    if err:
+        banner = (
+            "<div style='background:rgba(255,107,107,0.12);color:#ff6b6b;padding:14px 18px;"
+            "border-radius:10px;margin-bottom:18px;font-size:14px;'>"
+            f"{_html.escape(err)}</div>"
+        )
+    elif ok:
+        banner = (
+            "<div style='background:rgba(43,212,160,0.12);color:#2bd4a0;padding:14px 18px;"
+            "border-radius:10px;margin-bottom:18px;font-size:14px;'>"
+            "Reply sent — it's in your Outlook Sent Items.</div>"
+        )
+
+    cards = ""
+    for d in pending:
+        (did, fname, femail, subj, received, preview, draft_body,
+         rationale, urgency, _status, _decided, err_note) = d
+        color = URGENCY_COLORS.get(urgency or "normal", "#5b7cfa")
+        received_s = received.strftime("%b %d, %-I:%M %p") if received else "—"
+        retry_note = ""
+        if err_note:
+            retry_note = (
+                "<div style='color:#ff6b6b;font-size:12px;margin-bottom:10px;'>"
+                f"Last send attempt failed: {_html.escape(err_note[:200])}</div>"
+            )
+        cards += f"""
+        <div style='background:#12141c;border:1px solid #1c1f2a;border-radius:14px;padding:20px;margin-bottom:16px;'>
+            <div style='display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:6px;'>
+                <div>
+                    <div style='font-size:15px;font-weight:600;color:#e8eaf0;'>{_html.escape(subj or "(no subject)")}</div>
+                    <div style='font-size:13px;color:#8b90a0;margin-top:4px;'>
+                        {_html.escape(fname or "")} &lt;{_html.escape(femail or "")}&gt; · {received_s}
+                    </div>
+                </div>
+                <span class='pill' style='background:{color}1f;color:{color};white-space:nowrap;'>{_html.escape((urgency or "normal").title())}</span>
+            </div>
+
+            <div style='font-size:12px;color:#565a6b;margin:12px 0 14px;font-style:italic;'>
+                {_html.escape(rationale or "")}
+            </div>
+
+            <details style='margin-bottom:14px;'>
+                <summary style='cursor:pointer;font-size:12px;color:#6b7080;'>Original message</summary>
+                <div style='margin-top:10px;padding:14px;background:#0a0b0f;border:1px solid #1c1f2a;border-radius:10px;font-size:13px;color:#8b90a0;white-space:pre-wrap;line-height:1.55;'>{_html.escape(preview or "")}</div>
+            </details>
+
+            {retry_note}
+
+            <form method='post' action='/emails/{did}/send'>
+                <label style='display:block;font-size:11px;color:#565a6b;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;'>Rowan's draft — edit before sending</label>
+                <textarea name='body' rows='9' style="width:100%;font-family:'Inter',sans-serif;font-size:14px;line-height:1.6;padding:14px;background:#0a0b0f;border:1px solid #1c1f2a;border-radius:10px;color:#d4d7e0;resize:vertical;">{_html.escape(draft_body or "")}</textarea>
+                <div style='display:flex;align-items:center;gap:14px;margin-top:12px;flex-wrap:wrap;'>
+                    <button type='submit' class='btn btn-done' style='padding:9px 16px;font-size:13px;'>
+                        <i class='ti ti-send'></i> Approve &amp; send
+                    </button>
+                    <label style='font-size:12px;color:#8b90a0;display:flex;align-items:center;gap:6px;cursor:pointer;'>
+                        <input type='checkbox' name='reply_all' value='1'> Reply all
+                    </label>
+                </div>
+            </form>
+
+            <form method='post' action='/emails/{did}/discard' style='margin-top:10px;'
+                  onsubmit='return confirm("Discard this draft?");'>
+                <button type='submit' class='btn btn-reopen' style='padding:9px 16px;font-size:13px;'>
+                    <i class='ti ti-x'></i> Discard
+                </button>
+            </form>
+        </div>"""
+
+    if not cards:
+        cards = (
+            "<div style='background:#12141c;border:1px solid #1c1f2a;border-radius:14px;'>"
+            "<div class='empty'>Nothing waiting on you. Scan the inbox to look for new mail.</div></div>"
+        )
+
+    sent_rows = ""
+    for s in recent_sent:
+        (_sid, sfname, sfemail, ssubj, _sreceived, _sprev,
+         sbody, _srat, _surg, _sstatus, sdecided, _serr) = s
+        when = sdecided.strftime("%b %d, %-I:%M %p") if sdecided else "—"
+        sent_rows += f"""
+        <tr>
+            <td style='color:#8b90a0;'>{when}</td>
+            <td><strong style='color:#e8eaf0;'>{_html.escape(sfname or sfemail or "")}</strong></td>
+            <td style='color:#8b90a0;'>{_html.escape(ssubj or "")}</td>
+            <td style='color:#565a6b;'>{_html.escape((sbody or "")[:90])}{"…" if len(sbody or "") > 90 else ""}</td>
+        </tr>"""
+    if not sent_rows:
+        sent_rows = "<tr><td colspan='4' class='empty'>No replies sent yet.</td></tr>"
+
+    return f"""
+    <html>
+    {page_head("Email — Rowan")}
+    <body>
+        {header_html(email, "emails")}
+        <div class='container'>
+            {banner}
+            <div class='section-title'>Inbox</div>
+            <div class='cards'>
+                <div class='stat-card'><div class='number'>{n_pending}</div><div class='label'>Awaiting You</div></div>
+                <div class='stat-card'><div class='number green'>{n_sent_today}</div><div class='label'>Sent Today</div></div>
+                <div class='stat-card'><div class='number'>{n_skipped_today}</div><div class='label'>Filtered Today</div></div>
+            </div>
+
+            <form method='post' action='/emails/scan' style='margin:20px 0 4px;'>
+                <button type='submit' style="font-family:inherit;background:#5b7cfa;color:white;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:500;">
+                    <i class='ti ti-refresh'></i> Scan inbox now
+                </button>
+                <span style='font-size:12px;color:#565a6b;margin-left:12px;'>Runs automatically at 8:15am and 1pm on weekdays. Only mail addressed directly to you.</span>
+            </form>
+
+            <div class='section-title'>Drafts awaiting approval</div>
+            {cards}
+
+            <div class='section-title'>Recently sent</div>
+            <table>
+                <tr><th>When</th><th>To</th><th>Subject</th><th>Reply</th></tr>
+                {sent_rows}
             </table>
         </div>
     </body>

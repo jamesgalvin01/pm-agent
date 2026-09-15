@@ -130,10 +130,29 @@ def run_nudges_job():
     log(f"Nudge pass: {summary}")
 
 
+def run_email_reply_job():
+    """
+    Draft replies to inbox mail for James to approve on /emails.
+    Weekdays only. Nothing is sent here — drafts sit as 'pending' until
+    James clicks Approve & send. Idempotent: messages already in
+    email_drafts are skipped by graph_message_id.
+    """
+    if datetime.now().weekday() >= 5:
+        return
+    log("Running email reply draft pass...")
+    from email_replies import run_reply_draft_pass
+    stats = run_reply_draft_pass()
+    log(f"Email reply pass: {stats}")
+
+
 # ----- Schedule -----
 schedule.every().day.at("08:00").do(safe("daily jobs", run_daily_jobs))
 schedule.every().monday.at("08:00").do(safe("weekly jobs", run_weekly_jobs))
 schedule.every().day.at("09:00").do(safe("LinkedIn draft", run_linkedin_draft_job))
+
+# Rowan email reply drafts — weekdays, morning and early afternoon
+schedule.every().day.at("08:15").do(safe("email reply pass", run_email_reply_job))
+schedule.every().day.at("13:00").do(safe("email reply pass", run_email_reply_job))
 
 # Rowan proactive nudges — DISABLED (James, Sep 2026: noon nudge was too much).
 # The job is still defined above; re-enable by uncommenting the line below.
@@ -144,6 +163,7 @@ log("- Gmail and Outlook scanned every day at 8am.")
 log("- Reminders run every day at 8am.")
 log("- Status reports run every Monday at 8am.")
 log("- LinkedIn draft email sent every day at 9am.")
+log("- Email reply drafts prepared at 08:15 / 13:00, weekdays only.")
 log("- Rowan nudges: disabled.")
 check_database()
 
