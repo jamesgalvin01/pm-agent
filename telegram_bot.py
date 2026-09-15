@@ -12,8 +12,10 @@ Setup: run telegram_setup.py once. It prints your chat id and registers the
 webhook with a secret.
 """
 import os
+import threading
+
 import requests
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Request, Response
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
@@ -68,9 +70,42 @@ def _answer_callback(callback_id: str, text: str = "") -> None:
 
 BUTTON_WORDS = {"send": "SEND", "no": "NO", "later": "LATER"}
 
+# A scan is slow (Graph, then a Claude call per message). Telegram re-delivers
+# a webhook that doesn't answer promptly, so scans run in the background and
+# this lock stops a retry from starting a second one.
+_scan_lock = threading.Lock()
+
+
+def run_inbox_scan():
+    """Scan the inbox, then send the first draft. Reports back either way."""
+    if not _scan_lock.acquire(blocking=False):
+        send_message("Already checking your inbox - hang on.")
+        return
+    try:
+        from email_replies import run_reply_draft_pass
+        from approvals import get_pending, notify_next_email_draft
+
+        stats = run_reply_draft_pass()
+
+        if notify_next_email_draft():
+            return                      # the draft itself is the reply
+        if get_pending():
+            send_message("Checked. There's still one waiting on your answer above.")
+            return
+        send_message(
+            f"Checked {stats.get('scanned', 0)} messages - nothing needs a reply from you."
+            f"\n{stats.get('skipped', 0)} filtered"
+            + (f", {stats['errors']} errored" if stats.get("errors") else "")
+        )
+    except Exception as e:
+        print(f"[telegram] inbox scan failed: {e}")
+        send_message(f"Inbox check failed: {str(e)[:200]}")
+    finally:
+        _scan_lock.release()
+
 
 @router.post("/telegram")
-async def telegram_webhook(request: Request):
+async def telegram_webhook(request: Request, background: BackgroundTasks):
     # GUARD 1: the secret Telegram was told to send with every update.
     if WEBHOOK_SECRET:
         got = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
@@ -115,9 +150,15 @@ async def telegram_webhook(request: Request):
             "Rowan here. When a reply is waiting I'll send it with Send / "
             "Discard / Later buttons. You can also type a rewrite and I'll "
             "read it back before anything goes out.\n\n"
-            "/pending - send me the next draft waiting for approval"
+            "/scan - check my inbox now and draft anything that needs a reply\n"
+            "/pending - send me the next draft already waiting for approval"
         )
         return Response(status_code=204)
+
+    if text.lower() in ("/scan", "/check", "/inbox"):
+        send_message("Checking your inbox...")
+        background.add_task(run_inbox_scan)
+        return Response(status_code=204, background=background)
 
     if text.lower() == "/pending":
         if not notify_next_email_draft():
