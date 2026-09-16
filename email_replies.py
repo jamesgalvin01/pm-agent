@@ -186,6 +186,14 @@ def _voice_samples(token) -> str:
     return "\n\n---\n\n".join(out[:4])
 
 
+QUOTE_MARKERS = r"\n\s*(From:|Sent from|On .* wrote:|-{3,}\s*Original Message|_{5,})"
+
+
+def new_content(body: str) -> str:
+    """The part of a message the sender actually wrote, without quoted history."""
+    return re.split(QUOTE_MARKERS, body or "")[0].strip()
+
+
 def _thread_text(messages: list, skip_id: str) -> str:
     parts = []
     for m in messages:
@@ -329,6 +337,9 @@ def run_reply_draft_pass(hours: int = 36, top: int = 25) -> dict:
 
         try:
             body = get_message_body(token, mid)
+            # Graph's bodyPreview stops around 255 chars, which is too little to
+            # judge a reply against. Keep a real excerpt of what they wrote.
+            preview = new_content(body)[:2000] or preview
             thread = _thread_text(get_thread_context(token, msg.get("conversationId")), mid)
             verdict = triage_and_draft(msg, body, thread, context, voice)
         except Exception as e:
@@ -351,7 +362,7 @@ def run_reply_draft_pass(hours: int = 36, top: int = 25) -> dict:
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (graph_message_id) DO NOTHING
         """, (mid, msg.get("conversationId"), name, address, subject, received,
-              preview[:500], draft or None, (verdict.get("reason") or "")[:400],
+              preview[:2000], draft or None, (verdict.get("reason") or "")[:400],
               verdict.get("urgency") or "normal", status))
         conn.commit()
 

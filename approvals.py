@@ -23,8 +23,10 @@ from outlook_mail import send_reply
 # telegram | sms | off
 APPROVAL_CHANNEL = os.getenv("APPROVAL_CHANNEL", "off").strip().lower()
 
-# Telegram allows 4096 chars per message; leave room for the framing text.
-MAX_DRAFT_CHARS = 3000
+# Telegram allows 4096 chars per message. The incoming email and the draft
+# share that budget, with room left for headers and the button hint.
+MAX_DRAFT_CHARS = 2000
+MAX_INCOMING_CHARS = 1400
 
 # How long a pending question stays answerable, by type.
 PENDING_TTL_SECONDS = {"send": 900, "email_reply": 43200}   # 15 minutes / 12 hours
@@ -115,7 +117,8 @@ def _next_untexted_draft():
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
-        SELECT id, from_name, from_email, subject, draft_body, urgency
+        SELECT id, from_name, from_email, subject, draft_body, urgency,
+               body_preview, rationale, received_at
           FROM email_drafts
          WHERE status = 'pending'
            AND draft_body IS NOT NULL
@@ -138,11 +141,11 @@ def _update(sql, params):
     conn.close()
 
 
-def shorten(text: str) -> str:
+def shorten(text: str, limit: int = MAX_DRAFT_CHARS) -> str:
     text = (text or "").strip()
-    if len(text) <= MAX_DRAFT_CHARS:
+    if len(text) <= limit:
         return text
-    return text[:MAX_DRAFT_CHARS].rstrip() + "\n\n[truncated - full text on /emails]"
+    return text[:limit].rstrip() + "\n\n[truncated - full text on /emails]"
 
 
 # ============================================================
@@ -172,18 +175,32 @@ def notify_next_email_draft() -> bool:
     if not row:
         return False
 
-    draft_id, fname, femail, subject, draft_body, urgency = row
+    (draft_id, fname, femail, subject, draft_body, urgency,
+     incoming, rationale, received) = row
     who = fname or femail or "unknown sender"
     flag = "⚠️ URGENT\n" if (urgency or "").lower() == "high" else ""
+    when = received.strftime("%b %d, %I:%M %p").replace(" 0", " ") if received else ""
+
+    header = f"{flag}From: {who}"
+    if femail and fname:
+        header += f" <{femail}>"
+    header += f"\nSubject: {subject or '(no subject)'}"
+    if when:
+        header += f"\nReceived: {when}"
+    if rationale:
+        header += f"\nWhy: {rationale.strip()}"
+
+    message = (
+        f"{header}\n\n"
+        "--- THEIR EMAIL ---\n"
+        f"{shorten(incoming, MAX_INCOMING_CHARS) or '(no text captured)'}\n\n"
+        "--- ROWAN'S REPLY ---\n"
+        f"{shorten(draft_body)}"
+    )
 
     set_pending({"type": "email_reply", "draft_id": draft_id})
     _update("UPDATE email_drafts SET texted_at = NOW() WHERE id = %s", (draft_id,))
-    _notify(
-        f"{flag}Reply to {who}\n"
-        f"Subject: {subject or '(no subject)'}\n\n"
-        f"{shorten(draft_body)}",
-        draft_id=draft_id,
-    )
+    _notify(message, draft_id=draft_id)
     return True
 
 
