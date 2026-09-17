@@ -103,7 +103,8 @@ def _draft_row(draft_id):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
-        SELECT graph_message_id, draft_body, from_name, from_email, subject, status
+        SELECT graph_message_id, draft_body, from_name, from_email, subject, status,
+               body_preview
           FROM email_drafts WHERE id = %s
     """, (draft_id,))
     row = cur.fetchone()
@@ -164,17 +165,22 @@ def _notify(text: str, draft_id=None) -> None:
         print(f"[approvals] APPROVAL_CHANNEL={APPROVAL_CHANNEL!r}; not delivering.")
 
 
-def notify_next_email_draft() -> bool:
-    """Send James the next unreviewed draft. Returns True if one went out."""
-    if APPROVAL_CHANNEL not in ("telegram", "sms"):
-        return False
-    if get_pending():
-        # Something is already awaiting his answer; never stack questions.
-        return False
-    row = _next_untexted_draft()
-    if not row:
-        return False
+def _draft_for_message(draft_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, from_name, from_email, subject, draft_body, urgency,
+               body_preview, rationale, received_at
+          FROM email_drafts WHERE id = %s
+    """, (draft_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row
 
+
+def _send_draft(row) -> None:
+    """Compose and deliver one draft for approval."""
     (draft_id, fname, femail, subject, draft_body, urgency,
      incoming, rationale, received) = row
     who = fname or femail or "unknown sender"
@@ -190,17 +196,42 @@ def notify_next_email_draft() -> bool:
     if rationale:
         header += f"\nWhy: {rationale.strip()}"
 
-    message = (
+    _notify(
         f"{header}\n\n"
         "--- THEIR EMAIL ---\n"
         f"{shorten(incoming, MAX_INCOMING_CHARS) or '(no text captured)'}\n\n"
         "--- ROWAN'S REPLY ---\n"
-        f"{shorten(draft_body)}"
+        f"{shorten(draft_body)}",
+        draft_id=draft_id,
     )
 
-    set_pending({"type": "email_reply", "draft_id": draft_id})
-    _update("UPDATE email_drafts SET texted_at = NOW() WHERE id = %s", (draft_id,))
-    _notify(message, draft_id=draft_id)
+
+def resend_pending_draft() -> bool:
+    """Re-send whatever is currently awaiting an answer. True if one went out."""
+    pending = get_pending()
+    if not pending or pending.get("type") != "email_reply":
+        return False
+    row = _draft_for_message(pending.get("draft_id"))
+    if not row:
+        return False
+    _send_draft(row)
+    return True
+
+
+def notify_next_email_draft() -> bool:
+    """Send James the next unreviewed draft. Returns True if one went out."""
+    if APPROVAL_CHANNEL not in ("telegram", "sms"):
+        return False
+    if get_pending():
+        # Something is already awaiting his answer; never stack questions.
+        return False
+    row = _next_untexted_draft()
+    if not row:
+        return False
+
+    set_pending({"type": "email_reply", "draft_id": row[0]})
+    _update("UPDATE email_drafts SET texted_at = NOW() WHERE id = %s", (row[0],))
+    _send_draft(row)
     return True
 
 
@@ -227,7 +258,8 @@ def handle_response(text: str) -> bool:
         _notify("That draft is gone. Nothing was sent.")
         return True
 
-    graph_message_id, draft_body, fname, femail, _subject, status = row
+    (graph_message_id, draft_body, fname, femail, _subject,
+     status, incoming) = row
     who = fname or femail or "them"
 
     if status != "pending":
@@ -277,11 +309,22 @@ def handle_response(text: str) -> bool:
         notify_next_email_draft()
         return True
 
-    # Anything else is a rewrite: replace the body, read it back, wait for SEND.
-    _update("UPDATE email_drafts SET draft_body = %s WHERE id = %s", (body, draft_id))
+    # Anything else steers the draft. James types an instruction ("make it
+    # firmer", "push it to Monday") as readily as replacement wording, so let
+    # Claude work out which and rewrite accordingly. Never sent without a
+    # further SEND.
+    try:
+        from email_replies import revise_reply
+        revised = revise_reply(incoming, draft_body, body)
+    except Exception as e:
+        print(f"[approvals] revise failed ({e}); using the message verbatim.")
+        revised = body
+    revised = (revised or "").strip() or body
+
+    _update("UPDATE email_drafts SET draft_body = %s WHERE id = %s", (revised, draft_id))
     set_pending({"type": "email_reply", "draft_id": draft_id})   # resets the clock
     _notify(
-        f"Updated the reply to {who}:\n\n{shorten(body)}",
+        f"Updated the reply to {who}:\n\n{shorten(revised)}",
         draft_id=draft_id,
     )
     return True

@@ -145,23 +145,30 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
 
     from approvals import handle_response, notify_next_email_draft
 
-    if text.lower() in ("/start", "/help"):
+    # "Pending" without the slash used to be swallowed as a rewrite of the
+    # draft. A lone command word is a command however it's typed.
+    cmd = text.strip().lower().lstrip("/")
+    if cmd in ("start", "help"):
         send_message(
             "Rowan here. When a reply is waiting I'll send it with Send / "
-            "Discard / Later buttons. You can also type a rewrite and I'll "
-            "read it back before anything goes out.\n\n"
+            "Discard / Later buttons. You can also tell me how to change it "
+            "- \"make it firmer\", \"push it to Monday\" - or type the wording "
+            "you want. I'll read it back before anything goes out.\n\n"
             "/scan - check my inbox now and draft anything that needs a reply\n"
             "/pending - send me the next draft already waiting for approval"
         )
         return Response(status_code=204)
 
-    if text.lower() in ("/scan", "/check", "/inbox"):
+    if cmd in ("scan", "check", "inbox"):
         send_message("Checking your inbox...")
         background.add_task(run_inbox_scan)
         return Response(status_code=204, background=background)
 
-    if text.lower() == "/pending":
-        if not notify_next_email_draft():
+    if cmd == "pending":
+        from approvals import resend_pending_draft
+        # If one is already awaiting an answer, re-send that rather than
+        # claiming there's nothing - the queue only ever holds one open.
+        if not (resend_pending_draft() or notify_next_email_draft()):
             send_message("Nothing waiting on you.")
         return Response(status_code=204)
 
