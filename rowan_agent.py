@@ -60,7 +60,7 @@ You have read tools (safe, run them whenever useful) and write tools (change the
 For READ tools (list_open_tasks, list_projects, get_project_details, lookup_person, list_people, list_leads, list_project_files, list_calendar_events, find_free_time):
 - Just call them when they help answer the question. No need to ask permission.
 
-For WRITE tools (mark_task_complete, reopen_task, create_task, add_risk, create_person, update_person, create_lead, add_project_note, create_calendar_event, update_calendar_event, delete_calendar_event):
+For WRITE tools (mark_task_complete, reopen_task, create_task, add_risk, create_person, update_person, create_project, update_project, create_lead, add_project_note, create_calendar_event, update_calendar_event, delete_calendar_event):
 - You must ALWAYS propose first, then wait for the user to confirm before executing.
 - To propose, describe in plain text what you intend to do and ASK for confirmation. Be specific (task IDs, exact text, due dates).
 - Do NOT call the write tool on the same turn as the proposal.
@@ -72,6 +72,10 @@ For WRITE tools (mark_task_complete, reopen_task, create_task, add_risk, create_
 - Before proposing a new event, check the calendar for conflicts at that time and mention any.
 - An event with attendees sends them real invitations. When proposing one, list every attendee email. Never guess an email address: look the person up, or ask.
 - To move or cancel an event, find it with list_calendar_events first and use its event_id.
+
+# Projects
+- Before creating a project, check list_projects so you don't add a duplicate under a slightly different name.
+- Use the project name exactly as James gives it. When he lists several, propose them all in one numbered proposal and create them all after one confirmation.
 
 # Notes, leads and files
 - Decisions, site observations and anything worth remembering that is not an action item go in add_project_note, not create_task.
@@ -297,6 +301,41 @@ TOOLS = [
         },
     },
     {
+        "name": "create_project",
+        "description": "Add a new project. REQUIRES prior user confirmation. Check list_projects first to avoid duplicates.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Project name exactly as James wants it shown. Required."},
+                "goal": {"type": "string", "description": "One-line description of the project / MCM's role."},
+                "status": {"type": "string", "description": "Default 'active'. Other values James uses: 'on hold', 'complete'."},
+                "rag_status": {"type": "string", "enum": ["green", "amber", "red"], "description": "Default 'green'."},
+                "owner_name": {"type": "string", "description": "Person who owns it (substring match against people). Optional."},
+                "start_date": {"type": "string", "description": "YYYY-MM-DD. Optional."},
+                "end_date": {"type": "string", "description": "YYYY-MM-DD. Optional."},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "update_project",
+        "description": "Change an existing project's name, description, status, RAG, owner or dates. REQUIRES prior user confirmation. Identify it by project_id (preferred) or match_name.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "integer"},
+                "match_name": {"type": "string", "description": "Substring of the current name. Must match exactly one project."},
+                "name": {"type": "string", "description": "New name."},
+                "goal": {"type": "string"},
+                "status": {"type": "string"},
+                "rag_status": {"type": "string", "enum": ["green", "amber", "red"]},
+                "owner_name": {"type": "string"},
+                "start_date": {"type": "string", "description": "YYYY-MM-DD."},
+                "end_date": {"type": "string", "description": "YYYY-MM-DD."},
+            },
+        },
+    },
+    {
         "name": "create_lead",
         "description": "Add a lead to the business-development pipeline. REQUIRES prior user confirmation.",
         "input_schema": {
@@ -371,6 +410,7 @@ TOOLS = [
 
 
 WRITE_TOOLS = {"mark_task_complete", "reopen_task", "create_task", "add_risk", "create_person", "update_person",
+               "create_project", "update_project",
                "create_lead", "add_project_note", "create_calendar_event", "update_calendar_event",
                "delete_calendar_event"}
 
@@ -722,6 +762,103 @@ def tool_update_person(args: dict) -> dict:
     return {"ok": True, "person": {"id": row[0], "name": row[1], "email": row[2], "role": row[3]}}
 
 
+def _clean_date(value):
+    """'' -> None, so an empty string never reaches a DATE column."""
+    value = (value or "").strip() if isinstance(value, str) else value
+    return value or None
+
+
+def tool_create_project(args: dict) -> dict:
+    name = (args.get("name") or "").strip()
+    if not name:
+        return {"error": "A project name is required."}
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, name FROM projects WHERE LOWER(TRIM(name)) = LOWER(%s)", (name,))
+    dup = cur.fetchone()
+    if dup:
+        cur.close()
+        conn.close()
+        return {"error": f"A project named '{dup[1]}' already exists (id {dup[0]}). Nothing created."}
+    owner_id = _resolve_person_id(cur, args.get("owner_name"))
+    try:
+        cur.execute(
+            """INSERT INTO projects (name, goal, status, rag_status, owner_id, start_date, end_date)
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (name, args.get("goal"), args.get("status") or "active", args.get("rag_status") or "green",
+             owner_id, _clean_date(args.get("start_date")), _clean_date(args.get("end_date"))),
+        )
+        new_id = cur.fetchone()[0]
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        cur.close()
+        conn.close()
+        return {"error": f"Could not create project: {e}"}
+    cur.close()
+    conn.close()
+    return {"ok": True, "project_id": new_id, "name": name, "owner_id": owner_id}
+
+
+def tool_update_project(args: dict) -> dict:
+    conn = get_connection()
+    cur = conn.cursor()
+    project_id = args.get("project_id")
+    if not project_id:
+        match = (args.get("match_name") or "").strip()
+        if not match:
+            cur.close()
+            conn.close()
+            return {"error": "Provide project_id or match_name."}
+        cur.execute("SELECT id, name FROM projects WHERE LOWER(name) LIKE %s LIMIT 2", (f"%{match.lower()}%",))
+        rows = cur.fetchall()
+        if len(rows) != 1:
+            cur.close()
+            conn.close()
+            return {"error": f"'{match}' matched {len(rows)} projects; use project_id."}
+        project_id = rows[0][0]
+
+    fields, params = [], []
+    for col in ("name", "goal", "status", "rag_status"):
+        if args.get(col):
+            fields.append(f"{col} = %s")
+            params.append(args[col].strip())
+    for col in ("start_date", "end_date"):
+        if col in args and args[col] is not None:
+            fields.append(f"{col} = %s")
+            params.append(_clean_date(args[col]))
+    if args.get("owner_name"):
+        owner_id = _resolve_person_id(cur, args["owner_name"])
+        if not owner_id:
+            cur.close()
+            conn.close()
+            return {"error": f"No person matching '{args['owner_name']}'"}
+        fields.append("owner_id = %s")
+        params.append(owner_id)
+    if not fields:
+        cur.close()
+        conn.close()
+        return {"error": "Nothing to update."}
+    params.append(project_id)
+    try:
+        cur.execute(
+            f"UPDATE projects SET {', '.join(fields)} WHERE id = %s RETURNING id, name, status, rag_status",
+            params,
+        )
+        row = cur.fetchone()
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        cur.close()
+        conn.close()
+        return {"error": f"Could not update project: {e}"}
+    cur.close()
+    conn.close()
+    if not row:
+        return {"error": f"No project with id {project_id}"}
+    return {"ok": True, "project": {"id": row[0], "name": row[1], "status": row[2], "rag_status": row[3]}}
+
+
 # ------------------------------------------------------------
 # Notes, files, leads (tables created on first use)
 # ------------------------------------------------------------
@@ -945,6 +1082,8 @@ TOOL_DISPATCH = {
     "add_risk":            tool_add_risk,
     "create_person":       tool_create_person,
     "update_person":       tool_update_person,
+    "create_project":      tool_create_project,
+    "update_project":      tool_update_project,
     "list_leads":          tool_list_leads,
     "create_lead":         tool_create_lead,
     "add_project_note":    tool_add_project_note,
