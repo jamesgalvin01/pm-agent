@@ -53,6 +53,12 @@ HELP_TEXT = (
     "Voice note: I'll transcribe it and pull out tasks and notes.\n"
     "Photo: I'll look at it and file it to OneDrive under the project. Put the project in the caption.\n"
     "PDF: I'll review it as your owner's rep and file it. Add a question in the caption if you have one.\n\n"
+    "/today - calendar, what's due, emails waiting on you\n"
+    "/week - the week ahead\n"
+    "/inbox - emails you haven't answered\n"
+    "/project 71 NoBE - one project's status\n"
+    "/leads - the pipeline\n"
+    "/linkedin - draft a LinkedIn post now (one also comes daily at 9am)\n\n"
     "/task call Greg re: pool tile Friday\n"
     "/lead Jane Doe, developer, Key Largo spec home\n"
     "/note 71 NoBE: owner approved the lobby finish upgrade\n"
@@ -376,6 +382,87 @@ def _edit_target(message: dict):
     return None
 
 
+def _linkedin_target(message: dict):
+    """Pending LinkedIn draft this message is meant for: Edit tapped in the last 10 minutes, or a reply to it."""
+    from linkedin_drafter import get_draft
+    edit = state_get("li_edit") or {}
+    if edit.get("draft_id") and time.time() < float(edit.get("until", 0)):
+        d = get_draft(edit["draft_id"])
+        if d and d["status"] == "pending":
+            return d["id"]
+    replied_to = (message.get("reply_to_message") or {}).get("message_id")
+    if replied_to:
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT id FROM linkedin_drafts WHERE telegram_message_id = %s AND status = 'pending'",
+                        (replied_to,))
+            row = cur.fetchone()
+        except Exception:
+            conn.rollback()
+            row = None
+        cur.close()
+        conn.close()
+        if row:
+            return row[0]
+    return None
+
+
+def edit_target(message: dict):
+    """('linkedin', id), ('email', id) or None: which draft a typed/voice message is editing."""
+    try:
+        li = _linkedin_target(message)
+    except Exception as e:
+        print(f"[telegram] linkedin target check failed: {e}")
+        li = None
+    if li is not None:
+        return ("linkedin", li)
+    em = _edit_target(message)
+    if em is not None:
+        return ("email", em)
+    return None
+
+
+def apply_linkedin_edit(draft_id, text: str) -> None:
+    state_set("li_edit", {})
+    try:
+        from linkedin_drafter import revise
+        _typing()
+        revise(draft_id, text)
+    except Exception as e:
+        print(f"[telegram] linkedin revise failed: {e}")
+        send_message(f"Couldn't revise the LinkedIn draft: {str(e)[:200]}")
+
+
+def linkedin_action(action: str, draft_id) -> None:
+    try:
+        import linkedin_drafter as li
+        d = li.get_draft(draft_id)
+        if not d or d["status"] != "pending":
+            send_message("That LinkedIn draft was already handled.")
+            return
+        if action == "liok":
+            li.approve(draft_id)
+        elif action == "liskip":
+            li.skip(draft_id)
+        elif action == "linew":
+            _typing()
+            li.new_version(draft_id)
+    except Exception as e:
+        print(f"[telegram] linkedin {action} failed: {e}")
+        send_message(f"LinkedIn draft action failed: {str(e)[:200]}")
+
+
+def linkedin_on_demand() -> None:
+    try:
+        import linkedin_drafter as li
+        _typing()
+        li.deliver(li.create_draft())
+    except Exception as e:
+        print(f"[telegram] linkedin draft failed: {e}")
+        send_message(f"Couldn't draft a LinkedIn post: {str(e)[:200]}")
+
+
 def apply_draft_answer(text: str) -> None:
     from approvals import handle_response
     state_set("edit_mode", {})
@@ -424,7 +511,7 @@ def run_inbox_scan():
 # MEDIA
 # ============================================================
 
-def handle_voice(file_id: str, file_size: int, filename: str, draft_id) -> None:
+def handle_voice(file_id: str, file_size: int, filename: str, target) -> None:
     from telegram_media import MediaError, download, transcribe
     _typing()
     try:
@@ -439,7 +526,9 @@ def handle_voice(file_id: str, file_size: int, filename: str, draft_id) -> None:
         return
 
     send_message(f"Heard: \"{transcript[:1500]}\"")
-    if draft_id is not None:
+    if target and target[0] == "linkedin":
+        apply_linkedin_edit(target[1], transcript)
+    elif target and target[0] == "email":
         apply_draft_answer(transcript)
     else:
         run_agent(f"[Voice note]\n{transcript}")
@@ -480,6 +569,32 @@ def handle_file(kind: str, file_id: str, file_size: int, mime: str, filename: st
 # ============================================================
 # WEBHOOK
 # ============================================================
+
+def _briefing_prompt(cmd: str, rest: str):
+    """Text sent to the agent for a briefing command, or None."""
+    if cmd == "today":
+        return ("Briefing: today. Sections: CALENDAR (today's events, times), DUE (open tasks due today "
+                "or overdue, oldest first), EMAIL (emails addressed to me in the last 2 days I haven't "
+                "answered; top 5), and a FOCUS line.")
+    if cmd == "week":
+        return ("Briefing: this week, today through Sunday. Sections: CALENDAR (events by day), "
+                "DUE (open tasks due this week or overdue, grouped by project), RISKS (open risks on "
+                "red or amber projects), EMAIL (unanswered emails to me from the last 7 days; top 5).")
+    if cmd == "inbox":
+        return ("Briefing: inbox. Emails addressed to me in the last 3 days that I haven't replied to, "
+                "numbered, newest first, one line each with sender, subject and what they need. "
+                "Flag anything urgent or money-related first.")
+    if cmd == "leads":
+        return ("Briefing: pipeline. Leads grouped by stage (skip Won/Lost unless updated this month), "
+                "with contact, value if known and source. End with which leads look stale.")
+    if cmd == "project":
+        if not rest:
+            return None
+        return (f"Briefing: project {rest}. Sections: STATUS (RAG, status, dates), NEXT MILESTONES, "
+                f"OPEN TASKS (due soonest first, with owner), RISKS, RECENT NOTES AND FILES, and "
+                f"EMAIL (recent emails mentioning it that I haven't answered).")
+    return None
+
 
 CAPTURE_PREFIX = {
     "task": "Quick capture (task)",
@@ -535,6 +650,7 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
                 draft_id = int(ref)
             except ValueError:
                 draft_id = ref
+            state_set("li_edit", {})
             state_set("edit_mode", {"draft_id": draft_id, "until": time.time() + EDIT_WINDOW_SECONDS})
             send_message(
                 "What should change? Type it or send a voice note. "
@@ -542,6 +658,22 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
                 reply_markup={"inline_keyboard": [[
                     {"text": "Send as is", "callback_data": f"send:{ref}"},
                     {"text": "Discard", "callback_data": f"no:{ref}"},
+                ]]},
+            )
+        elif action in ("ldgo", "ldno", "ldinfo"):
+            from lead_alerts import handle as lead_handle
+            background.add_task(lead_handle, action, int(ref))
+        elif action in ("liok", "linew", "liskip"):
+            background.add_task(linkedin_action, action, int(ref))
+        elif action == "liedit":
+            state_set("edit_mode", {})
+            state_set("li_edit", {"draft_id": int(ref), "until": time.time() + EDIT_WINDOW_SECONDS})
+            send_message(
+                "What should change? Type it or send a voice note: \"shorter\", \"more on hurricane "
+                "season prep\", or the wording you want.",
+                reply_markup={"inline_keyboard": [[
+                    {"text": "Approve as is", "callback_data": f"liok:{ref}"},
+                    {"text": "Skip today", "callback_data": f"liskip:{ref}"},
                 ]]},
             )
         elif action in ("ok", "cancel"):
@@ -567,7 +699,7 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
     if voice:
         background.add_task(
             handle_voice, voice.get("file_id"), voice.get("file_size") or 0,
-            voice.get("file_name"), _edit_target(message),
+            voice.get("file_name"), edit_target(message),
         )
         return done
 
@@ -595,7 +727,7 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
         send_message(HELP_TEXT)
         return done
 
-    if cmd in ("scan", "check", "inbox"):
+    if cmd in ("scan", "check"):
         send_message("Checking your inbox...")
         background.add_task(run_inbox_scan)
         return done
@@ -613,6 +745,14 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
         send_message("Fresh start. I've cleared my short-term context; your data is untouched.")
         return done
 
+    if cmd in ("today", "week", "inbox", "leads", "project"):
+        prompt = _briefing_prompt(cmd, rest)
+        if not prompt:
+            send_message("Which project? e.g. /project 71 NoBE")
+            return done
+        background.add_task(run_agent, prompt)
+        return done
+
     if cmd in CAPTURE_PREFIX:
         if not rest:
             send_message(f"Add the details after it, e.g. /{cmd} " + {
@@ -624,9 +764,22 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
         background.add_task(run_agent, f"{CAPTURE_PREFIX[cmd]}: {rest}")
         return done
 
-    # An answer to the email draft awaiting approval?
-    draft_id = _edit_target(message)
-    if draft_id is not None:
+    if cmd == "testlead":
+        from lead_alerts import send_test_alert
+        background.add_task(send_test_alert)
+        return done
+
+    if cmd == "linkedin":
+        send_message("Drafting a LinkedIn post...")
+        background.add_task(linkedin_on_demand)
+        return done
+
+    # Editing a draft (LinkedIn post or email reply)?
+    target = edit_target(message)
+    if target and target[0] == "linkedin":
+        background.add_task(apply_linkedin_edit, target[1], text)
+        return done
+    if target and target[0] == "email":
         background.add_task(apply_draft_answer, text)
         return done
     if cmd in ("send", "discard", "later"):

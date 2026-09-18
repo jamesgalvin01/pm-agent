@@ -114,7 +114,7 @@ def run_linkedin_draft_job():
     log("Running LinkedIn draft job...")
     from linkedin_drafter import run_linkedin_draft
     run_linkedin_draft()
-    log("LinkedIn draft sent.")
+    log("LinkedIn draft delivered.")
 
 
 def run_nudges_job():
@@ -172,7 +172,7 @@ log("Scheduler started.")
 log("- Gmail and Outlook scanned every day at 8am.")
 log("- Reminders run every day at 8am.")
 log("- Status reports run every Monday at 8am.")
-log("- LinkedIn draft email sent every day at 9am.")
+log("- LinkedIn draft sent every day at 9am (Telegram, or email if Telegram is off).")
 log("- Email reply drafts prepared at 08:15 / 13:00, weekdays only.")
 log("- Rowan nudges: disabled.")
 check_database()

@@ -142,25 +142,166 @@ Return only the post text, ready to paste."""
     )
     return response.content[0].text
 
-def run_linkedin_draft():
-    angle = ANGLES[date.today().timetuple().tm_yday % len(ANGLES)]
-    activity = get_recent_activity()
-    topic = get_weekly_topic()
-    post = generate_post(activity, topic, angle)
+# ============================================================
+# DRAFT STORE + DELIVERY (Telegram approval, email fallback)
+# ============================================================
 
-    print("\n--- LINKEDIN DRAFT ---")
-    print(f"[Angle: {angle['name']}]\n")
-    print(post)
-    print("----------------------\n")
+def _ensure_drafts_table(cur):
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS linkedin_drafts (
+            id SERIAL PRIMARY KEY,
+            angle TEXT,
+            body TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            telegram_message_id BIGINT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            decided_at TIMESTAMPTZ
+        )
+    """)
 
-    params = {
+
+def _db(sql, params=(), fetch=False):
+    conn = get_connection()
+    cur = conn.cursor()
+    _ensure_drafts_table(cur)
+    cur.execute(sql, params)
+    row = cur.fetchone() if fetch else None
+    conn.commit()
+    cur.close()
+    conn.close()
+    return row
+
+
+def get_draft(draft_id):
+    row = _db("SELECT id, angle, body, status, telegram_message_id FROM linkedin_drafts WHERE id = %s",
+              (draft_id,), fetch=True)
+    if not row:
+        return None
+    return {"id": row[0], "angle": row[1], "body": row[2], "status": row[3], "telegram_message_id": row[4]}
+
+
+def _telegram_live() -> bool:
+    channel = os.getenv("LINKEDIN_CHANNEL", "telegram").strip().lower()
+    return channel == "telegram" and bool(os.getenv("TELEGRAM_BOT_TOKEN")) and bool(os.getenv("TELEGRAM_CHAT_ID"))
+
+
+def _keyboard(draft_id):
+    return {"inline_keyboard": [
+        [{"text": "Approve", "callback_data": f"liok:{draft_id}"},
+         {"text": "Edit", "callback_data": f"liedit:{draft_id}"}],
+        [{"text": "New draft", "callback_data": f"linew:{draft_id}"},
+         {"text": "Skip today", "callback_data": f"liskip:{draft_id}"}],
+    ]}
+
+
+def _email_draft(post):
+    resend.Emails.send({
         "from": "Rowan <onboarding@resend.dev>",
         "to": "james@miami-coastline.com",
         "subject": f"LinkedIn draft for {date.today().strftime('%A, %b %d')} — ready to paste",
         "text": post + "\n\n---\nDrafted by Rowan. Edit before posting. To steer this week's topic, update the linkedin_topic table.",
-    }
-    resend.Emails.send(params)
-    print("LinkedIn draft emailed.")
+    })
+
+
+def deliver(draft_id, heading="LinkedIn draft") -> str:
+    """Send a stored draft to James. Returns 'telegram' or 'email'."""
+    d = get_draft(draft_id)
+    if _telegram_live():
+        from telegram_bot import send_message
+        msg_id = send_message(
+            f"{heading} ({d['angle']}):\n\n{d['body']}\n\n"
+            "Approve to get a clean copy to paste into LinkedIn. Edit lets you say what to change.",
+            reply_markup=_keyboard(draft_id),
+        )
+        if msg_id:
+            _db("UPDATE linkedin_drafts SET telegram_message_id = %s WHERE id = %s", (msg_id, draft_id))
+            return "telegram"
+        print("[linkedin] Telegram delivery failed; emailing instead.")
+    _email_draft(d["body"])
+    return "email"
+
+
+def create_draft(angle=None) -> int:
+    angle = angle or ANGLES[date.today().timetuple().tm_yday % len(ANGLES)]
+    post = generate_post(get_recent_activity(), get_weekly_topic(), angle).strip()
+    row = _db("INSERT INTO linkedin_drafts (angle, body) VALUES (%s, %s) RETURNING id",
+              (angle["name"], post), fetch=True)
+    return row[0]
+
+
+def _set_status(draft_id, status):
+    _db("UPDATE linkedin_drafts SET status = %s, decided_at = NOW() WHERE id = %s", (status, draft_id))
+
+
+def approve(draft_id):
+    from telegram_bot import send_message
+    d = get_draft(draft_id)
+    if not d:
+        send_message("That draft is gone.")
+        return
+    _set_status(draft_id, "approved")
+    send_message("Approved. Long-press the next message to copy it:")
+    send_message(d["body"])
+
+
+def skip(draft_id):
+    from telegram_bot import send_message
+    _set_status(draft_id, "skipped")
+    send_message("Skipped. No post today.")
+
+
+def new_version(draft_id):
+    """Replace a draft with a fresh one from the next angle."""
+    d = get_draft(draft_id)
+    if d:
+        _set_status(draft_id, "replaced")
+    names = [a["name"] for a in ANGLES]
+    idx = (names.index(d["angle"]) + 1) % len(ANGLES) if d and d["angle"] in names else 0
+    new_id = create_draft(ANGLES[idx])
+    deliver(new_id, heading="New LinkedIn draft")
+
+
+REVISE_PROMPT = """Revise this LinkedIn post by James Galvin (Miami Coastline Management, owner's rep firm in South Florida).
+
+<post>
+{post}
+</post>
+
+<james_instruction>
+{instruction}
+</james_instruction>
+
+James may describe a change ("shorter", "more about hurricane season") or give wording to use. Apply it and return the COMPLETE revised post.
+Keep: his voice, 130-200 words unless he asks otherwise, 3-5 hashtags at the end, no client names, no dollar figures, no confidential specifics (keep any [PLACEHOLDER] brackets unless he fills them in).
+Return only the post text."""
+
+
+def revise(draft_id, instruction):
+    d = get_draft(draft_id)
+    if not d or d["status"] != "pending":
+        from telegram_bot import send_message
+        send_message("That draft isn't open any more. Send /linkedin for a new one.")
+        return
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=700,
+        messages=[{"role": "user", "content": REVISE_PROMPT.format(post=d["body"], instruction=instruction)}],
+    )
+    body = (resp.content[0].text or "").strip() or d["body"]
+    _db("UPDATE linkedin_drafts SET body = %s WHERE id = %s", (body, draft_id))
+    deliver(draft_id, heading="Revised LinkedIn draft")
+
+
+def run_linkedin_draft():
+    draft_id = create_draft()
+    d = get_draft(draft_id)
+    print("\n--- LINKEDIN DRAFT ---")
+    print(f"[Angle: {d['angle']}]\n")
+    print(d["body"])
+    print("----------------------\n")
+    where = deliver(draft_id)
+    print(f"LinkedIn draft sent via {where}.")
+
 
 if __name__ == "__main__":
     run_linkedin_draft()

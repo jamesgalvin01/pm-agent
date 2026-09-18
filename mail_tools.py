@@ -256,3 +256,68 @@ def reply_mail(message_id: str, body: str, reply_all: bool = False, via: str = "
         recipients += [p["email"] for p in _people(meta.get("toRecipients")) + _people(meta.get("ccRecipients"))
                        if p["email"] and p["email"] != OWNER_EMAIL]
     return {"ok": True, "subject": meta.get("subject"), "sent_to": sorted(set(recipients))}
+
+
+# ============================================================
+# ATTACHMENTS
+# ============================================================
+
+MAX_ATTACHMENT = 25 * 1024 * 1024
+REVIEWABLE = (".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic")
+
+
+def review_attachment(message_id: str, attachment_name: str = None, question: str = None) -> dict:
+    """
+    Pull an attachment off an email, review it the same way as a PDF or photo
+    sent on Telegram, and file it to OneDrive under the project.
+    """
+    token = get_access_token()
+    meta = _check(requests.get(
+        f"{GRAPH}/me/messages/{message_id}",
+        headers=_headers(token),
+        params={"$select": "subject,from"},
+        timeout=30,
+    ), "lookup").json()
+    resp = _check(requests.get(
+        f"{GRAPH}/me/messages/{message_id}/attachments",
+        headers=_headers(token),
+        params={"$select": "id,name,contentType,size,isInline"},
+        timeout=30,
+    ), "attachment list")
+    files = [a for a in resp.json().get("value", [])
+             if a.get("@odata.type", "").endswith("fileAttachment") and not a.get("isInline")]
+    if not files:
+        return {"error": "That email has no file attachments."}
+
+    pick = None
+    if attachment_name:
+        want = attachment_name.lower()
+        pick = next((a for a in files if (a.get("name") or "").lower() == want), None) or \
+               next((a for a in files if want in (a.get("name") or "").lower()), None)
+        if not pick:
+            return {"error": f"No attachment matching '{attachment_name}'.",
+                    "attachments": [a.get("name") for a in files]}
+    else:
+        reviewable = [a for a in files if (a.get("name") or "").lower().endswith(REVIEWABLE)]
+        if len(reviewable) != 1:
+            return {"error": "Say which attachment to review.",
+                    "attachments": [a.get("name") for a in files]}
+        pick = reviewable[0]
+
+    if (pick.get("size") or 0) > MAX_ATTACHMENT:
+        return {"error": f"{pick.get('name')} is over 25 MB; too large to review here."}
+
+    raw = requests.get(
+        f"{GRAPH}/me/messages/{message_id}/attachments/{pick['id']}/$value",
+        headers=_headers(token), timeout=120,
+    )
+    _check(raw, "attachment download")
+
+    sender = _addr(meta.get("from"))
+    caption = f"From {sender['name'] or sender['email']}, email '{meta.get('subject') or ''}'."
+    if question:
+        caption += f" {question}"
+
+    from telegram_media import handle_document
+    result = handle_document(raw.content, pick.get("contentType") or "", pick.get("name") or "attachment", caption)
+    return {"attachment": pick.get("name"), "review": result["reply"], "onedrive_link": result.get("web_url")}
