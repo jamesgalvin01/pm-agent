@@ -57,3 +57,4 @@ Werkzeug==3.1.8
 resend
 python-multipart==0.0.20
 twilio
+tzdata

@@ -13,7 +13,8 @@ permissions, and it will:
 
 Prerequisites in the Azure app registration (portal.azure.com -> App
 registrations -> your app):
-  - API permissions -> Microsoft Graph -> Delegated: Mail.ReadWrite, Mail.Send
+  - API permissions -> Microsoft Graph -> Delegated: Mail.ReadWrite, Mail.Send,
+    Files.ReadWrite, Calendars.ReadWrite
     (Mail.Read and offline_access should already be there)
   - Authentication -> Advanced settings -> "Allow public client flows" = Yes
 """
@@ -21,7 +22,7 @@ import os
 import msal
 from dotenv import load_dotenv
 
-from outlook_mail import SCOPES, REFRESH_TOKEN_KEY, set_secret
+from outlook_mail import AUTH_SCOPES, REFRESH_TOKEN_KEY, set_secret
 
 load_dotenv()
 
@@ -38,7 +39,7 @@ def main():
         authority=f"https://login.microsoftonline.com/{TENANT_ID}",
     )
 
-    flow = app.initiate_device_flow(scopes=SCOPES)
+    flow = app.initiate_device_flow(scopes=AUTH_SCOPES)
     if "user_code" not in flow:
         raise SystemExit(
             "Could not start device flow: "
@@ -72,7 +73,7 @@ def main():
         print(token)
         return
 
-    print("\nDone. Rowan can now read and reply to email.")
+    print("\nDone. Rowan can now read and reply to email, file to OneDrive and use your calendar.")
 
 
 if __name__ == "__main__":

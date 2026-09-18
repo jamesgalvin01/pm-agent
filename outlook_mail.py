@@ -33,6 +33,11 @@ GRAPH = "https://graph.microsoft.com/v1.0"
 # Delegated scopes needed for read + reply. offline_access is added by MSAL.
 SCOPES = ["Mail.ReadWrite", "Mail.Send"]
 
+# What outlook_auth.py asks James to consent to: mail plus the OneDrive and
+# calendar access Rowan's Telegram features use. Mail calls keep requesting
+# only SCOPES, so mail keeps working even before the wider consent is done.
+AUTH_SCOPES = SCOPES + ["Files.ReadWrite", "Calendars.ReadWrite"]
+
 REFRESH_TOKEN_KEY = "outlook_refresh_token"
 
 

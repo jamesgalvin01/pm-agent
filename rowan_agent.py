@@ -46,7 +46,7 @@ SYSTEM_PROMPT = """You are Rowan, James Galvin's AI project manager at Miami Coa
 # Who you are
 - A capable, no-nonsense PM. You speak directly and skip pleasantries.
 - You refer to yourself as "I". You refer to the user as "James" or "you".
-- You only have visibility into MCM's project data via the tools listed below — you don't have access to email, calendars, or the outside world unless a tool exposes it.
+- You see MCM's project data, leads, project notes and filed photos/documents, and James's Outlook calendar, through the tools listed below. You don't have access to email or the outside world unless a tool exposes it.
 
 # How you communicate
 - Be concise. One or two short paragraphs, or a tight list. Never long preambles.
@@ -57,15 +57,26 @@ SYSTEM_PROMPT = """You are Rowan, James Galvin's AI project manager at Miami Coa
 # How you use tools
 You have read tools (safe, run them whenever useful) and write tools (change the database).
 
-For READ tools (list_open_tasks, list_projects, get_project_details, lookup_person):
+For READ tools (list_open_tasks, list_projects, get_project_details, lookup_person, list_people, list_leads, list_project_files, list_calendar_events, find_free_time):
 - Just call them when they help answer the question. No need to ask permission.
 
-For WRITE tools (mark_task_complete, reopen_task, create_task, add_risk):
+For WRITE tools (mark_task_complete, reopen_task, create_task, add_risk, create_person, update_person, create_lead, add_project_note, create_calendar_event, update_calendar_event, delete_calendar_event):
 - You must ALWAYS propose first, then wait for the user to confirm before executing.
 - To propose, describe in plain text what you intend to do and ASK for confirmation. Be specific (task IDs, exact text, due dates).
 - Do NOT call the write tool on the same turn as the proposal.
 - Only call the write tool after the user has clearly agreed (e.g. "yes", "do it", "go ahead", "confirmed"). If their reply is ambiguous, ask again.
 - After execution, give a one-line confirmation of what changed.
+
+# Calendar
+- All times are Eastern. Resolve "tomorrow", "Thursday", "next week" against today's date given below.
+- Before proposing a new event, check the calendar for conflicts at that time and mention any.
+- An event with attendees sends them real invitations. When proposing one, list every attendee email. Never guess an email address: look the person up, or ask.
+- To move or cancel an event, find it with list_calendar_events first and use its event_id.
+
+# Notes, leads and files
+- Decisions, site observations and anything worth remembering that is not an action item go in add_project_note, not create_task.
+- New prospects go in create_lead (stage 'New' unless James says otherwise).
+- Photos and documents James sends are filed to OneDrive automatically; list_project_files finds them later.
 
 # Data conventions
 - Dates use ISO format (YYYY-MM-DD).
@@ -144,6 +155,61 @@ TOOLS = [
         "name": "list_people",
         "description": "List all people in the team/collaborator directory. Returns each person's id, name, email, role, and open task count. Use this when the user asks who is on the team or who can be assigned tasks.",
         "input_schema": {"type": "object", "properties": {}},
+    },
+
+    # ---------- READ TOOLS (leads, notes/files, calendar) ----------
+    {
+        "name": "list_leads",
+        "description": "List leads in the business-development pipeline, newest activity first. Optionally filter by stage or a name/contact substring.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["New", "Contacted", "Qualified", "Proposal", "Won", "Lost"]},
+                "search": {"type": "string", "description": "Substring of lead name, contact, source or notes. Case-insensitive."},
+                "limit": {"type": "integer", "description": "Default 25."},
+            },
+        },
+    },
+    {
+        "name": "list_project_files",
+        "description": "Photos and documents James has sent Rowan, filed in OneDrive. Returns file name, project, what it shows/contains, OneDrive link and date. Optionally filter by project, kind, or a text search.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project_name": {"type": "string", "description": "Substring match."},
+                "kind": {"type": "string", "enum": ["photo", "document"]},
+                "search": {"type": "string", "description": "Substring of the file name or description."},
+                "days": {"type": "integer", "description": "Only files from the last N days."},
+                "limit": {"type": "integer", "description": "Default 20."},
+            },
+        },
+    },
+    {
+        "name": "list_calendar_events",
+        "description": "James's Outlook calendar events between two dates (inclusive), Eastern time. Returns event_id, subject, start, end, location, attendees.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "description": "YYYY-MM-DD. Required."},
+                "end_date": {"type": "string", "description": "YYYY-MM-DD. Defaults to start_date."},
+            },
+            "required": ["start_date"],
+        },
+    },
+    {
+        "name": "find_free_time",
+        "description": "Open blocks on James's own calendar (weekdays, 8am-6pm Eastern unless overridden) that are at least duration_minutes long. It cannot see other people's calendars.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "description": "YYYY-MM-DD. Required."},
+                "end_date": {"type": "string", "description": "YYYY-MM-DD. Defaults to start_date."},
+                "duration_minutes": {"type": "integer", "description": "Default 60."},
+                "day_start": {"type": "string", "description": "HH:MM, default 08:00."},
+                "day_end": {"type": "string", "description": "HH:MM, default 18:00."},
+            },
+            "required": ["start_date"],
+        },
     },
 
     # ---------- WRITE TOOLS ----------
@@ -230,10 +296,83 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "create_lead",
+        "description": "Add a lead to the business-development pipeline. REQUIRES prior user confirmation.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "The opportunity: company, developer or project (e.g. 'Key Largo spec home'). Required."},
+                "contact": {"type": "string", "description": "Contact person and/or email/phone."},
+                "value": {"type": "number", "description": "Estimated fee value in dollars, if James gave one."},
+                "status": {"type": "string", "enum": ["New", "Contacted", "Qualified", "Proposal", "Won", "Lost"], "description": "Default 'New'."},
+                "source": {"type": "string", "description": "How the lead came in (referral, DemandStar, LinkedIn...)."},
+                "notes": {"type": "string", "description": "Anything else worth keeping."},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "add_project_note",
+        "description": "Log a note against a project: a decision, a site observation, something someone said. Not for action items (use create_task). REQUIRES prior user confirmation.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project_name": {"type": "string", "description": "Substring match. Omit for a general note."},
+                "note": {"type": "string", "description": "The note. Required."},
+            },
+            "required": ["note"],
+        },
+    },
+    {
+        "name": "create_calendar_event",
+        "description": "Create an event on James's Outlook calendar. Attendees receive real invitations. REQUIRES prior user confirmation.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "subject": {"type": "string", "description": "Required."},
+                "start": {"type": "string", "description": "YYYY-MM-DDTHH:MM Eastern. Required."},
+                "end": {"type": "string", "description": "YYYY-MM-DDTHH:MM Eastern. Or give duration_minutes."},
+                "duration_minutes": {"type": "integer", "description": "Used when end is not given. Default 60."},
+                "location": {"type": "string"},
+                "attendees": {"type": "array", "items": {"type": "string"}, "description": "Email addresses to invite. Omit for a block on James's calendar only."},
+                "body": {"type": "string", "description": "Event description."},
+                "online_meeting": {"type": "boolean", "description": "Add a Teams link."},
+                "show_as": {"type": "string", "enum": ["busy", "tentative", "free", "oof"], "description": "Default busy."},
+            },
+            "required": ["subject", "start"],
+        },
+    },
+    {
+        "name": "update_calendar_event",
+        "description": "Move or rename an existing event (find its event_id with list_calendar_events). If only start is given, the event keeps its length. Attendees are notified of changes. REQUIRES prior user confirmation.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "Required."},
+                "subject": {"type": "string"},
+                "start": {"type": "string", "description": "YYYY-MM-DDTHH:MM Eastern."},
+                "end": {"type": "string", "description": "YYYY-MM-DDTHH:MM Eastern."},
+                "location": {"type": "string"},
+            },
+            "required": ["event_id"],
+        },
+    },
+    {
+        "name": "delete_calendar_event",
+        "description": "Delete an event from James's calendar. If he organized it with attendees, they get a cancellation. REQUIRES prior user confirmation.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"event_id": {"type": "string", "description": "Required."}},
+            "required": ["event_id"],
+        },
+    },
 ]
 
 
-WRITE_TOOLS = {"mark_task_complete", "reopen_task", "create_task", "add_risk", "create_person", "update_person"}
+WRITE_TOOLS = {"mark_task_complete", "reopen_task", "create_task", "add_risk", "create_person", "update_person",
+               "create_lead", "add_project_note", "create_calendar_event", "update_calendar_event",
+               "delete_calendar_event"}
 
 
 # ============================================================
@@ -344,9 +483,16 @@ def tool_get_project_details(args: dict) -> dict:
     cur.execute("SELECT id, description, likelihood, impact, mitigation, status FROM risks WHERE project_id = %s AND status = 'open'", (pid,))
     risks = [_clean(_row_to_dict(cur, r)) for r in cur.fetchall()]
 
+    ensure_extra_schema()
+    cur.execute("SELECT note, created_at FROM project_notes WHERE project_id = %s ORDER BY created_at DESC LIMIT 10", (pid,))
+    notes = [_clean(_row_to_dict(cur, r)) for r in cur.fetchall()]
+    cur.execute("SELECT kind, file_name, description, web_url, created_at FROM project_files WHERE project_id = %s ORDER BY created_at DESC LIMIT 10", (pid,))
+    files = [_clean(_row_to_dict(cur, r)) for r in cur.fetchall()]
+
     cur.close()
     conn.close()
-    return {"project": project, "milestones": milestones, "open_tasks": open_tasks, "risks": risks}
+    return {"project": project, "milestones": milestones, "open_tasks": open_tasks, "risks": risks,
+            "recent_notes": notes, "recent_files": files}
 
 
 def tool_lookup_person(args: dict) -> dict:
@@ -576,6 +722,217 @@ def tool_update_person(args: dict) -> dict:
     return {"ok": True, "person": {"id": row[0], "name": row[1], "email": row[2], "role": row[3]}}
 
 
+# ------------------------------------------------------------
+# Notes, files, leads (tables created on first use)
+# ------------------------------------------------------------
+
+_schema_ready = False
+
+
+def ensure_extra_schema() -> None:
+    """Tables the Telegram features use. Safe to call repeatedly."""
+    global _schema_ready
+    if _schema_ready:
+        return
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS project_notes (
+            id SERIAL PRIMARY KEY,
+            project_id INT,
+            note TEXT NOT NULL,
+            source TEXT DEFAULT 'rowan_chat',
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS project_files (
+            id SERIAL PRIMARY KEY,
+            project_id INT,
+            kind TEXT NOT NULL,
+            file_name TEXT,
+            onedrive_path TEXT,
+            web_url TEXT,
+            caption TEXT,
+            description TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS notes TEXT")
+    conn.commit()
+    cur.close()
+    conn.close()
+    _schema_ready = True
+
+
+def tool_list_leads(args: dict) -> dict:
+    ensure_extra_schema()
+    conn = get_connection()
+    cur = conn.cursor()
+    sql = "SELECT id, name, contact, value, status, source, notes, updated_at FROM leads WHERE TRUE"
+    params = []
+    if args.get("status"):
+        sql += " AND status = %s"
+        params.append(args["status"])
+    if args.get("search"):
+        sql += (" AND (LOWER(name) LIKE %s OR LOWER(COALESCE(contact,'')) LIKE %s"
+                " OR LOWER(COALESCE(source,'')) LIKE %s OR LOWER(COALESCE(notes,'')) LIKE %s)")
+        params += [f"%{args['search'].lower()}%"] * 4
+    sql += f" ORDER BY updated_at DESC NULLS LAST LIMIT {int(args.get('limit') or 25)}"
+    cur.execute(sql, params)
+    rows = [_clean(_row_to_dict(cur, r)) for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    for r in rows:
+        if r.get("value") is not None:
+            r["value"] = float(r["value"])
+    return {"count": len(rows), "leads": rows}
+
+
+def tool_create_lead(args: dict) -> dict:
+    ensure_extra_schema()
+    status = args.get("status") or "New"
+    if status not in ("New", "Contacted", "Qualified", "Proposal", "Won", "Lost"):
+        status = "New"
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO leads (name, contact, value, status, source, notes)
+           VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+        (args["name"].strip(), args.get("contact"), args.get("value") or 0, status,
+         args.get("source") or "Telegram", args.get("notes")),
+    )
+    new_id = cur.fetchone()[0]
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"ok": True, "lead_id": new_id, "name": args["name"], "status": status}
+
+
+def tool_add_project_note(args: dict) -> dict:
+    ensure_extra_schema()
+    conn = get_connection()
+    cur = conn.cursor()
+    project_id = _resolve_project_id(cur, args.get("project_name"))
+    if args.get("project_name") and not project_id:
+        cur.close()
+        conn.close()
+        return {"error": f"No project matching '{args['project_name']}'"}
+    cur.execute(
+        "INSERT INTO project_notes (project_id, note, source) VALUES (%s, %s, %s) RETURNING id",
+        (project_id, args["note"], args.get("source") or "rowan_chat"),
+    )
+    new_id = cur.fetchone()[0]
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"ok": True, "note_id": new_id, "project_id": project_id}
+
+
+def tool_list_project_files(args: dict) -> dict:
+    ensure_extra_schema()
+    conn = get_connection()
+    cur = conn.cursor()
+    sql = """
+        SELECT f.id, f.kind, f.file_name, p.name AS project, f.caption, f.description,
+               f.web_url, f.onedrive_path, f.created_at
+          FROM project_files f
+          LEFT JOIN projects p ON f.project_id = p.id
+         WHERE TRUE
+    """
+    params = []
+    if args.get("project_name"):
+        sql += " AND LOWER(p.name) LIKE %s"
+        params.append(f"%{args['project_name'].lower()}%")
+    if args.get("kind"):
+        sql += " AND f.kind = %s"
+        params.append(args["kind"])
+    if args.get("search"):
+        sql += (" AND (LOWER(COALESCE(f.file_name,'')) LIKE %s OR LOWER(COALESCE(f.description,'')) LIKE %s"
+                " OR LOWER(COALESCE(f.caption,'')) LIKE %s)")
+        params += [f"%{args['search'].lower()}%"] * 3
+    if args.get("days"):
+        sql += " AND f.created_at >= NOW() - (%s * INTERVAL '1 day')"
+        params.append(int(args["days"]))
+    sql += f" ORDER BY f.created_at DESC LIMIT {int(args.get('limit') or 20)}"
+    cur.execute(sql, params)
+    rows = [_clean(_row_to_dict(cur, r)) for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return {"count": len(rows), "files": rows}
+
+
+def record_project_file(project_name, kind, file_name, onedrive_path, web_url,
+                        caption=None, description=None) -> int:
+    """Called by the Telegram media handler after a successful upload."""
+    ensure_extra_schema()
+    conn = get_connection()
+    cur = conn.cursor()
+    project_id = _resolve_project_id(cur, project_name)
+    cur.execute(
+        """INSERT INTO project_files (project_id, kind, file_name, onedrive_path, web_url, caption, description)
+           VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+        (project_id, kind, file_name, onedrive_path, web_url, caption, description),
+    )
+    new_id = cur.fetchone()[0]
+    conn.commit()
+    cur.close()
+    conn.close()
+    return new_id
+
+
+def project_names() -> list:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM projects ORDER BY name")
+    names = [r[0] for r in cur.fetchall() if r[0]]
+    cur.close()
+    conn.close()
+    return names
+
+
+# ------------------------------------------------------------
+# Calendar
+# ------------------------------------------------------------
+
+def tool_list_calendar_events(args: dict) -> dict:
+    from outlook_calendar import list_events
+    events = list_events(args["start_date"], args.get("end_date"))
+    return {"count": len(events), "events": events}
+
+
+def tool_find_free_time(args: dict) -> dict:
+    from outlook_calendar import find_free_time
+    slots = find_free_time(args["start_date"], args.get("end_date"),
+                           args.get("duration_minutes") or 60,
+                           args.get("day_start"), args.get("day_end"))
+    return {"count": len(slots), "open_blocks": slots}
+
+
+def tool_create_calendar_event(args: dict) -> dict:
+    from outlook_calendar import create_event
+    return {"ok": True, "event": create_event(
+        subject=args["subject"], start=args["start"], end=args.get("end"),
+        duration_minutes=args.get("duration_minutes"), location=args.get("location"),
+        attendees=args.get("attendees"), body=args.get("body"),
+        online_meeting=bool(args.get("online_meeting")), show_as=args.get("show_as"),
+    )}
+
+
+def tool_update_calendar_event(args: dict) -> dict:
+    from outlook_calendar import update_event
+    return {"ok": True, "event": update_event(
+        args["event_id"], subject=args.get("subject"), start=args.get("start"),
+        end=args.get("end"), location=args.get("location"),
+    )}
+
+
+def tool_delete_calendar_event(args: dict) -> dict:
+    from outlook_calendar import delete_event
+    delete_event(args["event_id"])
+    return {"ok": True, "deleted": args["event_id"]}
+
+
 TOOL_DISPATCH = {
     "list_open_tasks":     tool_list_open_tasks,
     "list_projects":       tool_list_projects,
@@ -588,6 +945,15 @@ TOOL_DISPATCH = {
     "add_risk":            tool_add_risk,
     "create_person":       tool_create_person,
     "update_person":       tool_update_person,
+    "list_leads":          tool_list_leads,
+    "create_lead":         tool_create_lead,
+    "add_project_note":    tool_add_project_note,
+    "list_project_files":  tool_list_project_files,
+    "list_calendar_events":  tool_list_calendar_events,
+    "find_free_time":        tool_find_free_time,
+    "create_calendar_event": tool_create_calendar_event,
+    "update_calendar_event": tool_update_calendar_event,
+    "delete_calendar_event": tool_delete_calendar_event,
 }
 
 
@@ -626,6 +992,11 @@ def _load_conversation_messages(conversation_id: int) -> list[dict]:
     rows = list(reversed(cur.fetchall()))
     cur.close()
     conn.close()
+
+    # The window can open mid-exchange (on a tool_result, or an assistant turn).
+    # The API needs the history to start on a plain user message.
+    while rows and not (rows[0][0] == "user" and rows[0][1]):
+        rows.pop(0)
 
     messages = []
     for role, content, tool_calls, tool_results in rows:
@@ -670,24 +1041,76 @@ def _save_message(conversation_id: int, role: str, content: str = "",
     return new_id
 
 
+def save_exchange(conversation_id: int, user_text: str, assistant_text: str) -> int:
+    """
+    Record an exchange handled outside the agent loop (a photo or document
+    Rowan reviewed) so follow-up questions have it in context. Returns the
+    assistant message id.
+    """
+    _save_message(conversation_id, "user", content=user_text)
+    return _save_message(conversation_id, "assistant", content=assistant_text)
+
+
+# ============================================================
+# CONFIRMATION GUARD
+# ============================================================
+
+AFFIRMATIVE_STARTS = (
+    "yes", "y", "yep", "yeah", "yup", "confirm", "confirmed", "do it", "go ahead", "go",
+    "ok", "okay", "k", "approve", "approved", "sure", "sounds good", "save", "save it",
+    "please do", "correct", "proceed", "looks good", "lgtm", "send it", "book it",
+    "all good", "perfect",
+)
+
+
+def is_affirmative(text: str) -> bool:
+    t = "".join(ch for ch in (text or "").lower() if ch.isalnum() or ch.isspace()).strip()
+    return any(t == w or t.startswith(w + " ") for w in AFFIRMATIVE_STARTS)
+
+
 # ============================================================
 # MAIN ENTRY POINT
 # ============================================================
 
-def run_agent_turn(conversation_id: int, user_text: str) -> str:
+TELEGRAM_ADDENDUM = """
+# Channel: Telegram
+- James is on his phone. Plain text only: no markdown, no asterisks, no # headers. Keep it short.
+- When you propose a write action, put the marker [CONFIRM] alone on the last line. James gets Confirm / Cancel buttons, and Confirm reaches you as "yes". Use [CONFIRM] only on proposals.
+- A message starting with [Voice note] is dictation from the field, transcribed by machine, so expect misheard names. Pull out: (1) action items, proposed as tasks with project, assignee and due date where you can tell; (2) decisions and site observations, proposed as project notes. Put everything in ONE numbered proposal so one Confirm saves it all. If nothing is actionable, say so in a line. Use list_projects / list_people to match names.
+- A message starting with "Quick capture" is a one-line entry James wants saved. Resolve project, person and date, then propose it in one compact line. Only ask a question if a required field is missing.
+"""
+
+
+def _system_prompt(channel: str) -> str:
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo("America/New_York"))
+    prompt = SYSTEM_PROMPT + (
+        f"\n# Right now\nToday is {now.strftime('%A, %B %d, %Y')} ({now.date().isoformat()}); "
+        f"the time is {now.strftime('%I:%M %p').lstrip('0')} Eastern.\n"
+    )
+    if channel == "telegram":
+        prompt += TELEGRAM_ADDENDUM
+    return prompt
+
+
+def run_agent_turn(conversation_id: int, user_text: str, channel: str = "web") -> str:
     """
     Persist the user message, run Claude (with tool-use loop), persist all assistant
     output, and return the final visible text reply.
     """
     _save_message(conversation_id, "user", content=user_text)
     messages = _load_conversation_messages(conversation_id)
+    system = _system_prompt(channel)
+    # Write tools only run when James's message is a go-ahead; otherwise the
+    # model gets told to propose first. This backs up the prompt rule.
+    confirmed = is_affirmative(user_text)
 
     final_text = ""
     for _ in range(MAX_TOOL_ROUNDS):
         response = client.messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
-            system=SYSTEM_PROMPT,
+            system=system,
             tools=TOOLS,
             messages=messages,
         )
@@ -721,7 +1144,11 @@ def run_agent_turn(conversation_id: int, user_text: str) -> str:
 
             tool_result_blocks = []
             for tu in tool_use_blocks:
-                result = _execute_tool(tu["name"], tu.get("input") or {})
+                if tu["name"] in WRITE_TOOLS and not confirmed:
+                    result = {"error": "Not executed: James has not confirmed this yet. "
+                                       "Describe exactly what you will do and ask him to confirm."}
+                else:
+                    result = _execute_tool(tu["name"], tu.get("input") or {})
                 tool_result_blocks.append({
                     "type": "tool_result",
                     "tool_use_id": tu["id"],
