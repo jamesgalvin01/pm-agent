@@ -287,6 +287,42 @@ def send_reply(message_id: str, body_text: str, reply_all: bool = False) -> str:
     return draft_id
 
 
+def _recipients(addresses) -> list:
+    return [{"emailAddress": {"address": a}} for a in (addresses or [])]
+
+
+def send_new_mail(to: list, subject: str, body_text: str, cc: list = None) -> str:
+    """
+    Send a brand-new email (not a reply) from James's mailbox.
+
+    Builds a draft first, then sends it, so it lands in Sent Items like any
+    email he writes himself. Returns the draft's message id. Only called from
+    an approved action.
+    """
+    token = get_access_token()
+    resp = requests.post(
+        f"{GRAPH}/me/messages",
+        headers=_headers(token),
+        json={
+            "subject": subject,
+            "body": {"contentType": "HTML", "content": text_to_html(body_text)},
+            "toRecipients": _recipients(to),
+            "ccRecipients": _recipients(cc),
+        },
+        timeout=30,
+    )
+    _check(resp, "new draft")
+    draft_id = resp.json()["id"]
+
+    resp = requests.post(
+        f"{GRAPH}/me/messages/{draft_id}/send",
+        headers=_headers(token),
+        timeout=30,
+    )
+    _check(resp, "send")
+    return draft_id
+
+
 if __name__ == "__main__":
     tok = get_access_token()
     msgs = get_inbox_messages(tok, hours=48, top=5)

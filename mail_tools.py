@@ -5,6 +5,8 @@ mail_tools.py — email tools for Rowan's chat (dashboard and Telegram).
                  James has already replied in each thread
   read_mail()    one message in full, plus the earlier thread
   reply_mail()   send James's approved reply on the original thread
+  compose_mail() send a brand-new email James has approved
+  writing_samples()  recent sent mail, so new emails sound like him
 
 Replies only go out after James confirms the exact text (rowan_agent checks
 both). A reply sent here is also recorded in email_drafts so the scan-and-
@@ -17,7 +19,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from db import get_connection
-from outlook_mail import GRAPH, get_access_token, get_sent_samples, send_reply
+from outlook_mail import GRAPH, get_access_token, get_sent_samples, send_reply, send_new_mail
 
 OWNER_EMAIL = "james@miami-coastline.com"
 ET = ZoneInfo("America/New_York")
@@ -256,6 +258,54 @@ def reply_mail(message_id: str, body: str, reply_all: bool = False, via: str = "
         recipients += [p["email"] for p in _people(meta.get("toRecipients")) + _people(meta.get("ccRecipients"))
                        if p["email"] and p["email"] != OWNER_EMAIL]
     return {"ok": True, "subject": meta.get("subject"), "sent_to": sorted(set(recipients))}
+
+
+# ============================================================
+# NEW EMAILS
+# ============================================================
+
+EMAIL_RE = re.compile(r"^[^@\s<>,;]+@[^@\s<>,;]+\.[a-z]{2,}$", re.IGNORECASE)
+MAX_RECIPIENTS = 10
+
+
+def _clean_addresses(values, field) -> list:
+    if isinstance(values, str):
+        values = re.split(r"[,;]", values)
+    out = []
+    for v in values or []:
+        v = (v or "").strip().lower()
+        if not v:
+            continue
+        if not EMAIL_RE.match(v):
+            raise ValueError(f"'{v}' in {field} is not a full email address.")
+        if v not in out:
+            out.append(v)
+    return out
+
+
+def writing_samples() -> dict:
+    token = get_access_token()
+    return {"james_voice_samples": _voice_samples(token)}
+
+
+def compose_mail(to, subject: str, body: str, cc=None) -> dict:
+    to = _clean_addresses(to, "To")
+    cc = [a for a in _clean_addresses(cc, "Cc") if a not in to]
+    subject = (subject or "").strip()
+    body = (body or "").strip()
+    if not to:
+        raise ValueError("No recipient.")
+    if len(to) + len(cc) > MAX_RECIPIENTS:
+        raise ValueError(f"More than {MAX_RECIPIENTS} recipients; send this one from Outlook.")
+    if not subject:
+        raise ValueError("The subject is empty.")
+    if not body:
+        raise ValueError("The email is empty.")
+    if re.search(r"\[[^\]]{1,60}\]", body):
+        raise ValueError("The email still has [bracketed] placeholders to fill in.")
+
+    send_new_mail(to, subject, body, cc=cc)
+    return {"ok": True, "subject": subject, "sent_to": to, "cc": cc}
 
 
 # ============================================================

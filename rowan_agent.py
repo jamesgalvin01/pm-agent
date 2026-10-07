@@ -83,6 +83,10 @@ For WRITE tools (mark_task_complete, reopen_task, create_task, add_risk, create_
 - Replying: draft in James's voice (see james_voice_samples from read_email: brief, direct, no fluff). No subject line, no signature block; a short sign-off is fine. Never invent dates, figures or commitments; use [brackets] for anything James must fill in and ask him for it instead of proposing a reply that still has brackets.
 - Propose every reply before sending, showing: To (and Cc if reply-all), the subject, then the COMPLETE reply text exactly as it will go out. Default to replying to the sender only; propose reply-all when others on the thread clearly need it, and say so.
 - If James asks for changes, show the full revised text again as a new proposal. Only call reply_to_email after he confirms, with exactly the text he approved.
+- New emails (not replies): when James asks you to write, send or email someone, use send_new_email. Call get_my_writing_style first and match his voice: brief, direct, no fluff, a short sign-off, no signature block.
+- Never guess an email address. Use lookup_person, or search_email by the person's name to find an address they've written from. If you can't find one, ask James for it.
+- Propose every new email before sending, showing To, Cc (if any), Subject and the COMPLETE body exactly as it will go out. Never invent dates, figures or commitments; use [brackets] for anything James must supply and ask him for it, rather than proposing an email that still has brackets.
+- If James asks for changes, show the whole revised email again as a new proposal. Only call send_new_email after he confirms, with exactly the recipients, subject and text he approved. One email per proposal.
 
 # Projects
 - Before creating a project, check list_projects so you don't add a duplicate under a slightly different name.
@@ -349,6 +353,25 @@ TOOLS = [
         },
     },
     {
+        "name": "get_my_writing_style",
+        "description": "Returns a couple of James's recently sent emails as voice samples. Read-only. Call before drafting a new email.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "send_new_email",
+        "description": "Send a brand-new email from James's Outlook (not a reply; use reply_to_email for that). REQUIRES prior user confirmation of the exact recipients, subject and body shown in your proposal.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to": {"type": "array", "items": {"type": "string"}, "description": "Recipient email addresses. Required."},
+                "cc": {"type": "array", "items": {"type": "string"}, "description": "Cc email addresses. Optional."},
+                "subject": {"type": "string", "description": "The approved subject line. Required."},
+                "body": {"type": "string", "description": "The approved email text, exactly as proposed. Required."},
+            },
+            "required": ["to", "subject", "body"],
+        },
+    },
+    {
         "name": "reply_to_email",
         "description": "Send James's reply on the original email thread. REQUIRES prior user confirmation of the exact text: body must be exactly the reply text shown to James in your proposal.",
         "input_schema": {
@@ -471,7 +494,7 @@ TOOLS = [
 
 
 WRITE_TOOLS = {"mark_task_complete", "reopen_task", "create_task", "add_risk", "create_person", "update_person",
-               "create_project", "update_project", "reply_to_email",
+               "create_project", "update_project", "reply_to_email", "send_new_email",
                "create_lead", "add_project_note", "create_calendar_event", "update_calendar_event",
                "delete_calendar_event"}
 
@@ -1157,6 +1180,33 @@ def tool_reply_to_email(args: dict) -> dict:
                       via=args.get("_channel") or "chat")
 
 
+def tool_get_my_writing_style(args: dict) -> dict:
+    from mail_tools import writing_samples
+    return writing_samples()
+
+
+def tool_send_new_email(args: dict) -> dict:
+    from mail_tools import compose_mail
+    return compose_mail(args.get("to"), args.get("subject"), args.get("body"), cc=args.get("cc"))
+
+
+def _new_email_matches_proposal(args: dict, proposal: str) -> bool:
+    """Recipients, subject and body must all be what James was shown."""
+    body = _norm(args.get("body"))
+    subject = _norm(args.get("subject"))
+    to = args.get("to") or []
+    cc = args.get("cc") or []
+    if isinstance(to, str):
+        to = [to]
+    if isinstance(cc, str):
+        cc = [cc]
+    if not body or not subject or not to:
+        return False
+    if body not in proposal or subject not in proposal:
+        return False
+    return all(_norm(a) in proposal for a in list(to) + list(cc))
+
+
 def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip().lower()
 
@@ -1191,6 +1241,8 @@ TOOL_DISPATCH = {
     "search_email":        tool_search_email,
     "read_email":          tool_read_email,
     "reply_to_email":      tool_reply_to_email,
+    "get_my_writing_style": tool_get_my_writing_style,
+    "send_new_email":      tool_send_new_email,
     "review_email_attachment": tool_review_email_attachment,
     "create_project":      tool_create_project,
     "update_project":      tool_update_project,
@@ -1410,6 +1462,10 @@ def run_agent_turn(conversation_id: int, user_text: str, channel: str = "web") -
                                        "complete reply exactly as it will go out and ask him to confirm."}
                 elif tu["name"] == "reply_to_email":
                     result = _execute_tool(tu["name"], {**(tu.get("input") or {}), "_channel": channel})
+                elif tu["name"] == "send_new_email" and not _new_email_matches_proposal(tu.get("input") or {}, proposal):
+                    result = {"error": "Not sent: the recipients, subject or text aren't what James approved. "
+                                       "Show him the complete email (To, Cc, Subject, body) exactly as it will go "
+                                       "out and ask him to confirm."}
                 else:
                     result = _execute_tool(tu["name"], tu.get("input") or {})
                 tool_result_blocks.append({
