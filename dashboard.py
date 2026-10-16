@@ -7,7 +7,9 @@ import uvicorn
 
 from db import get_connection
 from auth import (
-    create_magic_link_token,
+    create_login,
+    verify_login_code,
+    session_needs_refresh,
     consume_magic_link_token,
     create_session_jwt,
     require_auth,
@@ -21,6 +23,7 @@ from outlook_mail import send_reply
 from chat import router as chat_router
 from sms_webhook import router as sms_router
 from telegram_bot import router as telegram_router
+from app_shell import router as app_shell_router, APP_HEAD, MOBILE_CSS, tab_bar
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 
@@ -30,6 +33,28 @@ app = FastAPI()
 app.include_router(chat_router)
 app.include_router(sms_router)
 app.include_router(telegram_router)
+app.include_router(app_shell_router)     # manifest + icons for the phone app
+
+
+@app.middleware("http")
+async def renew_session(request: Request, call_next):
+    """Re-issue a day-old session cookie so the phone app stays signed in while it's used."""
+    response = await call_next(request)
+    cookie = request.cookies.get(SESSION_COOKIE_NAME)
+    if cookie and response.status_code < 400 and session_needs_refresh(cookie):
+        _set_session_cookie(response, ALLOWED_EMAIL)
+    return response
+
+
+def _set_session_cookie(response, email: str) -> None:
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=create_session_jwt(email),
+        max_age=int(SESSION_DURATION.total_seconds()),
+        httponly=True,
+        secure=True,
+        samesite="lax",
+    )
 
 
 # ============================================================
@@ -191,8 +216,9 @@ def page_head(title: str) -> str:
     return f"""
     <head>
         <title>{title}</title>
+        {APP_HEAD}
         {FONT_LINKS}
-        <style>{BASE_CSS}</style>
+        <style>{BASE_CSS}{MOBILE_CSS}</style>
     </head>"""
 
 
@@ -215,10 +241,11 @@ def header_html(email: str, active: str) -> str:
             <div class='user'>
                 <span>{email}</span>
                 <form method='post' action='/logout' style='display:inline'>
-                    <button type='submit'>Sign out</button>
+                    <button type='submit' aria-label='Sign out'><span class='signout-text'>Sign out</span><i class='ti ti-logout signout-icon'></i></button>
                 </form>
             </div>
-        </div>"""
+        </div>
+        {tab_bar(active)}"""
 
 
 # ============================================================
@@ -226,17 +253,37 @@ def header_html(email: str, active: str) -> str:
 # ============================================================
 
 @app.get("/login", response_class=HTMLResponse)
-def login_get(sent: int = 0):
-    msg = ""
+def login_get(sent: int = 0, err: int = 0):
     if sent:
-        msg = """
-        <div style='background:rgba(43,212,160,0.12);color:#2bd4a0;padding:14px 18px;border-radius:10px;margin-bottom:18px;font-size:14px;'>
-            Check your email for a sign-in link. It's valid for 15 minutes.
-        </div>"""
+        notice = ""
+        if err:
+            notice = """
+        <div class='note bad'>That code didn't work. Check the newest email, or send a new code.</div>"""
+        body = f"""
+            <h1>Check your email</h1>
+            <p>Type the 6-digit code from the email. On a computer you can click the link in it instead.</p>
+            {notice}
+            <form method='post' action='/login/code'>
+                <label>Sign-in code</label>
+                <input class='code' type='text' name='code' inputmode='numeric' pattern='[0-9 ]*'
+                       autocomplete='one-time-code' maxlength='7' required autofocus placeholder='000000'>
+                <button type='submit'>Sign in</button>
+            </form>
+            <form method='get' action='/login'><button type='submit' class='ghost'>Send a new code</button></form>"""
+    else:
+        body = """
+            <h1>Rowan</h1>
+            <p>We'll email you a 6-digit code and a one-time link.</p>
+            <form method='post' action='/login'>
+                <label>Email address</label>
+                <input type='email' name='email' required autofocus autocomplete='email'>
+                <button type='submit'>Email me a sign-in code</button>
+            </form>"""
     return f"""
     <html>
     <head>
         <title>Sign in — Rowan</title>
+        {APP_HEAD}
         {FONT_LINKS}
         <style>
             * {{ box-sizing: border-box; }}
@@ -245,9 +292,10 @@ def login_get(sent: int = 0):
                 background: #0a0b0f; margin: 0; color: #d4d7e0;
                 -webkit-font-smoothing: antialiased;
                 display: flex; align-items: center; justify-content: center; min-height: 100vh;
+                padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
             }}
             .wrap {{
-                width: 100%; max-width: 400px; padding: 36px;
+                width: 100%; max-width: 400px; padding: 32px 28px;
                 background: #12141c; border: 1px solid #1c1f2a; border-radius: 18px;
             }}
             .logo {{
@@ -258,33 +306,30 @@ def login_get(sent: int = 0):
                 box-shadow: 0 0 24px rgba(91,124,250,0.4);
             }}
             h1 {{ color: #f4f5f8; margin: 0 0 8px; font-size: 22px; font-weight: 600; letter-spacing: -0.3px; }}
-            p {{ color: #6b7080; margin: 0 0 24px; font-size: 14px; }}
+            p {{ color: #6b7080; margin: 0 0 24px; font-size: 14px; line-height: 1.5; }}
             label {{ display: block; font-size: 11px; color: #565a6b; margin-bottom: 7px; text-transform: uppercase; letter-spacing: 0.5px; }}
-            input[type=email] {{
-                width: 100%; padding: 12px 14px; background: #0a0b0f;
-                border: 1px solid #1c1f2a; border-radius: 10px; font-size: 14px;
+            input {{
+                width: 100%; padding: 13px 14px; background: #0a0b0f;
+                border: 1px solid #1c1f2a; border-radius: 10px; font-size: 16px;
                 color: #d4d7e0; font-family: inherit;
             }}
-            input[type=email]:focus {{ outline: none; border-color: #5b7cfa; }}
+            input.code {{ font-size: 28px; letter-spacing: 10px; text-align: center; font-weight: 600; }}
+            input:focus {{ outline: none; border-color: #5b7cfa; }}
             button {{
                 width: 100%; background: #5b7cfa; color: white; border: none;
-                padding: 13px; border-radius: 10px; font-size: 15px; font-weight: 500;
+                padding: 14px; border-radius: 10px; font-size: 16px; font-weight: 500;
                 cursor: pointer; margin-top: 18px; font-family: inherit; transition: opacity 0.15s ease;
             }}
+            button.ghost {{ background: none; color: #6b7080; margin-top: 8px; font-size: 14px; }}
             button:hover {{ opacity: 0.9; }}
+            .note {{ padding: 12px 16px; border-radius: 10px; margin-bottom: 16px; font-size: 14px; }}
+            .note.bad {{ background: rgba(255,107,107,0.12); color: #ff6b6b; }}
         </style>
     </head>
     <body>
         <div class='wrap'>
             <div class='logo'><i class='ti ti-sparkles'></i></div>
-            <h1>Rowan</h1>
-            <p>Sign in with a one-time link sent to your email.</p>
-            {msg}
-            <form method='post' action='/login'>
-                <label>Email address</label>
-                <input type='email' name='email' required autofocus>
-                <button type='submit'>Send me a sign-in link</button>
-            </form>
+            {body}
         </div>
     </body>
     </html>"""
@@ -295,14 +340,25 @@ def login_post(email: str = Form(...)):
     email_norm = email.lower().strip()
 
     if email_norm == ALLOWED_EMAIL:
-        token = create_magic_link_token(email_norm)
+        token, code = create_login(email_norm)
         link = f"{PUBLIC_BASE_URL}/auth/verify?token={token}"
         try:
-            send_magic_link_email(email_norm, link)
+            send_magic_link_email(email_norm, link, code)
         except Exception as e:
-            print(f"[login] failed to send magic link to {email_norm}: {e}")
+            print(f"[login] failed to send sign-in email to {email_norm}: {e}")
 
+    # Same answer either way, so the page never reveals which email is allowed.
     return RedirectResponse(url="/login?sent=1", status_code=303)
+
+
+@app.post("/login/code")
+def login_code(code: str = Form(...)):
+    email = verify_login_code(ALLOWED_EMAIL, code)
+    if not email:
+        return RedirectResponse(url="/login?sent=1&err=1", status_code=303)
+    response = RedirectResponse(url="/", status_code=303)
+    _set_session_cookie(response, email)
+    return response
 
 
 @app.get("/auth/verify")
@@ -318,16 +374,8 @@ def auth_verify(token: str):
             status_code=400,
         )
 
-    jwt_token = create_session_jwt(email)
     response = RedirectResponse(url="/", status_code=303)
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=jwt_token,
-        max_age=int(SESSION_DURATION.total_seconds()),
-        httponly=True,
-        secure=True,
-        samesite="lax",
-    )
+    _set_session_cookie(response, email)
     return response
 
 
@@ -348,6 +396,17 @@ def complete_task(task_id: int, request: Request, email: str = Depends(require_a
     reg.complete_task(task_id)          # also completes the Outlook flag, if it came from one
     back = request.headers.get("referer") or "/"
     return RedirectResponse(url=back, status_code=303)
+
+
+@app.post("/snooze/{task_id}")
+def snooze_task(task_id: int, request: Request, email: str = Depends(require_auth)):
+    """Push a task's due date 3 days (from today, if it's already late)."""
+    from datetime import timedelta
+    import register as reg
+    t = reg.get_task(task_id)
+    if t and t["status"] == "open":
+        reg.update_task(task_id, due_date=max(reg.today(), t["due_date"] or reg.today()) + timedelta(days=3))
+    return RedirectResponse(url=request.headers.get("referer") or "/", status_code=303)
 
 
 @app.post("/reopen/{task_id}")
@@ -881,6 +940,7 @@ def home(filter: str = "open", project: int = 0, ball: str = "", email: str = De
         </a>"""
 
     tasks_html = ""
+    cards_html = ""
     for t in tasks:
         is_complete = t["status"] == "complete"
         action_btn = f"""
@@ -911,8 +971,37 @@ def home(filter: str = "open", project: int = 0, ball: str = "", email: str = De
             <td>{tier_html}</td>
             <td>{action_btn}</td>
         </tr>"""
+
+        # Phone card for the same task
+        meta = [esc(t.get("project") or "No project"), court]
+        if t["due_date"]:
+            meta.append(f"due {reg.short_date(t['due_date'])}")
+        color = tier_colors.get(tier, "#2a2e3c")
+        email_link = (f" <a href='{esc(t['source_url'])}' target='_blank' style='color:#5b7cfa;'>"
+                      f"<i class='ti ti-mail'></i></a>") if t.get("source_url") else ""
+        if is_complete:
+            buttons = f"""
+                <form method='post' action='/reopen/{t["id"]}'><button class='t-open'><i class='ti ti-rotate'></i> Reopen</button></form>"""
+        else:
+            buttons = f"""
+                <form method='post' action='/complete/{t["id"]}'><button class='t-done'><i class='ti ti-check'></i> Done</button></form>
+                <form method='post' action='/snooze/{t["id"]}'><button class='t-snooze'><i class='ti ti-clock-plus'></i> +3 days</button></form>"""
+        tier_line = (f"<div class='t-tier' style='color:{color};'>{reg.TIER_LABELS[tier]}</div>"
+                     if tier and tier < 5 else "")
+        blocking = " · <span style='color:#c792ea;'>blocking</span>" if t.get("blocking") else ""
+        cards_html += f"""
+        <div class='tcard {"complete" if is_complete else ""}' style='border-left-color:{color};'>
+            <div class='t-top'>
+                <div class='t-desc'>{esc(t["description"] or "")}{email_link}</div>
+                <div class='t-id'>#{t["id"]}</div>
+            </div>
+            <div class='t-meta'>{" · ".join(meta)}{blocking}</div>
+            {tier_line}
+            <div class='t-actions'>{buttons}</div>
+        </div>"""
     if not tasks:
         tasks_html = "<tr><td colspan='7' class='empty'>Nothing here.</td></tr>"
+        cards_html = "<div class='empty'>Nothing here.</div>"
 
     def chip(label, href, on):
         return f"<a href='{href}' class='filter-btn {'active' if on else ''}'>{label}</a>"
@@ -923,7 +1012,7 @@ def home(filter: str = "open", project: int = 0, ball: str = "", email: str = De
     filters = (chip("Open, ranked", link(filter="open"), filter == "open")
                + chip("Completed", link(filter="complete"), filter == "complete")
                + chip("All", link(filter="all"), filter == "all")
-               + "<span style='display:inline-block;width:18px;'></span>"
+               + "<span class='filter-gap' style='display:inline-block;width:18px;'></span>"
                + chip("Everyone", link(ball=""), not ball)
                + chip("Mine", link(ball="me"), ball == "me")
                + chip("Waiting on others", link(ball="waiting"), ball == "waiting")
@@ -935,7 +1024,7 @@ def home(filter: str = "open", project: int = 0, ball: str = "", email: str = De
     <body>
         {header_html(email, "dashboard")}
         <div class='container'>
-            <div class='section-title'>Projects <span style='color:#565a6b;font-weight:400;'>(tap one for its register)</span></div>
+            <div class='section-title'>Projects <span style='color:#565a6b;font-weight:400;text-transform:none;letter-spacing:0;'>· tap one for its register</span></div>
             <div class='cards'>
                 {projects_html}
                 <div class='stat-card'>
@@ -949,7 +1038,8 @@ def home(filter: str = "open", project: int = 0, ball: str = "", email: str = De
             </div>
             <div class='section-title'>{esc(title)} ({len(tasks)})</div>
             <div class='filters'>{filters}</div>
-            <table>
+            <div class='tcards m-only'>{cards_html}</div>
+            <table class='d-only'>
                 <tr>
                     <th>#</th>
                     <th>Task</th>

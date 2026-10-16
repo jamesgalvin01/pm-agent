@@ -8,6 +8,7 @@ Routes:
 - POST /api/chat/conversations            -> create a new conversation
 - POST /api/chat/send                     -> user posts a message, Claude replies
 """
+from app_shell import APP_HEAD, MOBILE_CSS, tab_bar
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -167,6 +168,7 @@ def chat_page(email: str = Depends(require_auth)):
     <html>
     <head>
         <title>Rowan — Chat</title>
+        {APP_HEAD}
         <link rel='preconnect' href='https://fonts.googleapis.com'>
         <link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
         <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap' rel='stylesheet'>
@@ -241,6 +243,21 @@ def chat_page(email: str = Depends(require_auth)):
             .composer button {{ background: #5b7cfa; color: white; border: none; padding: 0 24px; border-radius: 12px; font-size: 14px; cursor: pointer; font-weight: 500; font-family: inherit; transition: opacity 0.15s ease; }}
             .composer button:hover {{ opacity: 0.9; }}
             .composer button:disabled {{ background: #2a2e3c; color: #565a6b; cursor: not-allowed; }}
+            body {{ height: 100dvh; }}
+            .m-new {{ display: none; }}
+        </style>
+        <style>{MOBILE_CSS}</style>
+        <style>
+            @media (max-width: 760px) {{
+                body {{ padding-bottom: 0; }}
+                .sidebar {{ display: none; }}
+                .m-new {{ display: inline-flex; background: none; border: none; color: #8ea4ff; font-size: 22px; padding: 0 6px; }}
+                .messages {{ padding: 16px 14px; }}
+                .msg .bubble {{ max-width: 88%; font-size: 15px; }}
+                .composer {{ padding: 10px 12px; margin-bottom: calc(64px + env(safe-area-inset-bottom)); }}
+                .composer textarea {{ font-size: 16px; }}
+                .composer button {{ padding: 0 16px; }}
+            }}
         </style>
     </head>
     <body>
@@ -253,15 +270,18 @@ def chat_page(email: str = Depends(require_auth)):
             <nav>
                 <a href='/'>Dashboard</a>
                 <a href='/leads'>Leads</a>
+                <a href='/emails'>Email</a>
                 <a href='/chat' class='active'>Chat</a>
             </nav>
             <div class='user'>
+                <button class='m-new' onclick='newConversation()' aria-label='New conversation'><i class='ti ti-edit'></i></button>
                 <span>{email}</span>
                 <form method='post' action='/logout'>
-                    <button type='submit'>Sign out</button>
+                    <button type='submit' aria-label='Sign out'><span class='signout-text'>Sign out</span><i class='ti ti-logout signout-icon'></i></button>
                 </form>
             </div>
         </div>
+        {tab_bar("chat")}
 
         <div class='layout'>
             <aside class='sidebar'>
