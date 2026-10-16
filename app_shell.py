@@ -32,7 +32,13 @@ APP_HEAD = f"""
         <meta name='apple-mobile-web-app-status-bar-style' content='black-translucent'>
         <link rel='manifest' href='/manifest.webmanifest'>
         <link rel='apple-touch-icon' href='/static/apple-touch-icon.png?v=2'>
-        <link rel='icon' type='image/png' sizes='32x32' href='/static/favicon-32.png?v=2'>"""
+        <link rel='icon' type='image/png' sizes='32x32' href='/static/favicon-32.png?v=2'>
+        <link rel='icon' type='image/png' sizes='192x192' href='/static/icon-192.png?v=2'>
+        <style>
+            .logo.brand-logo {{ background: none !important; overflow: hidden; padding: 0;
+                               box-shadow: 0 0 18px rgba(41,200,230,0.25) !important; }}
+            .logo.brand-logo img {{ width: 100%; height: 100%; display: block; }}
+        </style>"""
 
 
 TABS = (

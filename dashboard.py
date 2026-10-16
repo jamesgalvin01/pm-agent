@@ -228,7 +228,7 @@ def header_html(email: str, active: str) -> str:
     return f"""
         <div class='header'>
             <div class='brand'>
-                <div class='logo'><i class='ti ti-sparkles'></i></div>
+                <div class='logo brand-logo'><img src='/static/apple-touch-icon.png?v=2' alt='Rowan'></div>
                 <h1>Rowan</h1>
                 <span class='sub'>Miami Coastline</span>
             </div>
@@ -328,7 +328,7 @@ def login_get(sent: int = 0, err: int = 0):
     </head>
     <body>
         <div class='wrap'>
-            <div class='logo'><i class='ti ti-sparkles'></i></div>
+            <div class='logo brand-logo'><img src='/static/apple-touch-icon.png?v=2' alt='Rowan'></div>
             {body}
         </div>
     </body>

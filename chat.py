@@ -263,7 +263,7 @@ def chat_page(email: str = Depends(require_auth)):
     <body>
         <div class='header'>
             <div class='brand'>
-                <div class='logo'><i class='ti ti-sparkles'></i></div>
+                <div class='logo brand-logo'><img src='/static/apple-touch-icon.png?v=2' alt='Rowan'></div>
                 <h1>Rowan</h1>
                 <span class='sub'>Chat</span>
             </div>
