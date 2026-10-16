@@ -579,6 +579,27 @@ def status_report() -> str:
             lines.append("Open question: none")
     except Exception as e:
         lines.append(f"Queue: unknown ({str(e)[:120]})")
+    # 4. The last few decisions, so "why didn't I get a draft?" has an answer
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""SELECT from_name, from_email, subject, status, rationale
+                         FROM email_drafts WHERE status <> 'processing'
+                        ORDER BY created_at DESC, id DESC LIMIT 5""")
+        recent = cur.fetchall()
+        cur.close()
+        conn.close()
+        if recent:
+            lines.append("\nLast emails Rowan looked at:")
+            for fname, femail, subj, st, why in recent:
+                verdict = {"pending": "DRAFTED", "sent": "sent", "discarded": "discarded",
+                           "skipped": "skipped"}.get(st, st)
+                line = f"- {(subj or '(no subject)')[:40]} ({fname or femail or '?'}): {verdict}"
+                if why and st in ("skipped", "pending"):
+                    line += f" - {why[:90]}"
+                lines.append(line)
+    except Exception as e:
+        lines.append(f"Recent decisions: unknown ({str(e)[:100]})")
     lines.append(f"Working hours now (7am-7pm weekdays): {'yes' if in_working_hours() else 'no'}")
     lines.append(f"Channel: {APPROVAL_CHANNEL}")
     return "\n".join(lines)
