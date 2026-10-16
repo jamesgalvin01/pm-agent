@@ -1351,7 +1351,69 @@ def _load_conversation_messages(conversation_id: int) -> list[dict]:
         elif role == "tool_result":
             if tool_results:
                 messages.append({"role": "user", "content": tool_results})
-    return messages
+    return _repair_tool_pairs(messages)
+
+
+INTERRUPTED_RESULT = ("Not completed: this step was interrupted (Rowan restarted). Nothing was "
+                      "confirmed as done. Check before assuming it happened, and ask James before retrying.")
+
+
+def _repair_tool_pairs(messages: list[dict]) -> list[dict]:
+    """
+    Make the history valid for the API even if a turn was cut off part-way
+    (e.g. a redeploy between saving a tool call and saving its result):
+      - every tool_use gets a tool_result in the very next message (a stand-in
+        saying it was interrupted, if the real one was never saved)
+      - tool_results with no matching tool_use just before them are dropped
+      - consecutive user messages are merged, tool_results first
+    """
+    out: list[dict] = []
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+        if msg["role"] == "assistant":
+            out.append(msg)
+            blocks = msg["content"] if isinstance(msg["content"], list) else []
+            ids = [b.get("id") for b in blocks if isinstance(b, dict) and b.get("type") == "tool_use"]
+            if ids:
+                nxt = messages[i + 1] if i + 1 < len(messages) else None
+                results, rest = [], []
+                if nxt and nxt["role"] == "user" and isinstance(nxt["content"], list):
+                    for b in nxt["content"]:
+                        if isinstance(b, dict) and b.get("type") == "tool_result":
+                            if b.get("tool_use_id") in ids:
+                                results.append(b)
+                        else:
+                            rest.append(b)
+                    i += 1
+                have = {b.get("tool_use_id") for b in results}
+                for tid in ids:
+                    if tid not in have:
+                        results.append({"type": "tool_result", "tool_use_id": tid,
+                                        "content": INTERRUPTED_RESULT, "is_error": True})
+                out.append({"role": "user", "content": results + rest})
+            i += 1
+            continue
+        # user message
+        content = msg["content"]
+        if isinstance(content, list):
+            # tool_results not answering the assistant turn just before: orphans
+            content = [b for b in content if not (isinstance(b, dict) and b.get("type") == "tool_result")]
+            if not content:
+                i += 1
+                continue
+        if out and out[-1]["role"] == "user":
+            prev = out[-1]["content"]
+            prev_blocks = prev if isinstance(prev, list) else [{"type": "text", "text": prev}]
+            new_blocks = content if isinstance(content, list) else [{"type": "text", "text": content}]
+            out[-1] = {"role": "user", "content": prev_blocks + new_blocks}
+        else:
+            out.append({"role": "user", "content": content})
+        i += 1
+    # The API needs the history to start with a user message.
+    while out and out[0]["role"] != "user":
+        out.pop(0)
+    return out
 
 
 def _save_message(conversation_id: int, role: str, content: str = "",
