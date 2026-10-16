@@ -343,21 +343,19 @@ def logout():
 # ============================================================
 
 @app.post("/complete/{task_id}")
-def complete_task(task_id: int, email: str = Depends(require_auth)):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("UPDATE tasks SET status = 'complete' WHERE id = %s", (task_id,))
-    conn.commit()
-    cur.close()
-    conn.close()
-    return RedirectResponse(url="/", status_code=303)
+def complete_task(task_id: int, request: Request, email: str = Depends(require_auth)):
+    import register as reg
+    reg.complete_task(task_id)          # also completes the Outlook flag, if it came from one
+    back = request.headers.get("referer") or "/"
+    return RedirectResponse(url=back, status_code=303)
 
 
 @app.post("/reopen/{task_id}")
 def reopen_task(task_id: int, email: str = Depends(require_auth)):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("UPDATE tasks SET status = 'open' WHERE id = %s", (task_id,))
+    cur.execute("UPDATE tasks SET status = 'open', completed_at = NULL, last_touched_at = NOW() WHERE id = %s",
+                (task_id,))
     conn.commit()
     cur.close()
     conn.close()
@@ -819,86 +817,117 @@ def emails_page(ok: int = 0, err: str = "", email: str = Depends(require_auth)):
 
 
 @app.get("/", response_class=HTMLResponse)
-def home(filter: str = "open", email: str = Depends(require_auth)):
+def home(filter: str = "open", project: int = 0, ball: str = "", email: str = Depends(require_auth)):
+    """
+    The action-item register. Open view = ranked (overdue, due in 48h, blocking,
+    stale waiting-on, rest). ?project=<id> narrows it to one project's register;
+    ?ball=me|waiting splits your to-dos from what others owe you.
+    """
+    import register as reg
+    reg.ensure_register_schema()
+    esc = _html.escape
+
     conn = get_connection()
     cur = conn.cursor()
-
-    cur.execute("SELECT id, name, status, rag_status FROM projects")
+    cur.execute("SELECT id, name, status, rag_status FROM projects ORDER BY name")
     projects = cur.fetchall()
-
-    if filter == "all":
-        cur.execute("""
-            SELECT t.id, t.description, t.due_date, t.priority, t.status, p.name
-            FROM tasks t
-            LEFT JOIN projects p ON t.project_id = p.id
-            ORDER BY t.status ASC, t.due_date ASC NULLS LAST
-        """)
-    else:
-        cur.execute("""
-            SELECT t.id, t.description, t.due_date, t.priority, t.status, p.name
-            FROM tasks t
-            LEFT JOIN projects p ON t.project_id = p.id
-            WHERE t.status = %s
-            ORDER BY t.due_date ASC NULLS LAST
-        """, (filter,))
-
-    tasks = cur.fetchall()
-
     cur.execute("SELECT COUNT(*) FROM tasks WHERE status = 'open'")
     open_count = cur.fetchone()[0]
     cur.execute("SELECT COUNT(*) FROM tasks WHERE status = 'complete'")
     complete_count = cur.fetchone()[0]
 
+    if filter == "open":
+        tasks = reg.get_register(project=project or None, ball=ball or None)
+    else:
+        sql = """SELECT t.id, t.description, t.due_date, t.priority, t.status, p.name AS project,
+                        COALESCE(t.ball_in_court, 'me') AS ball_in_court, t.waiting_on,
+                        COALESCE(t.blocking, FALSE) AS blocking, t.source_url, NULL::int AS tier
+                   FROM tasks t LEFT JOIN projects p ON t.project_id = p.id WHERE TRUE"""
+        params = []
+        if filter == "complete":
+            sql += " AND t.status = 'complete'"
+        if project:
+            sql += " AND t.project_id = %s"
+            params.append(project)
+        if ball:
+            sql += " AND COALESCE(t.ball_in_court, 'me') = %s"
+            params.append(ball)
+        sql += " ORDER BY t.status ASC, t.completed_at DESC NULLS LAST, t.due_date ASC NULLS LAST LIMIT 300"
+        cur.execute(sql, params)
+        cols = [c.name for c in cur.description]
+        tasks = [dict(zip(cols, r)) for r in cur.fetchall()]
     cur.close()
     conn.close()
 
-    # RAG colors (dark-theme tuned)
     rag_colors = {"green": "#2bd4a0", "amber": "#f5a623", "red": "#ff6b6b"}
+    tier_colors = {1: "#ff6b6b", 2: "#f5a623", 3: "#c792ea", 4: "#5ab0ff", 5: "#8b90a0"}
+
+    def link(**kw):
+        q = {"filter": filter, "project": project, "ball": ball}
+        q.update(kw)
+        return "/?" + "&".join(f"{k}={v}" for k, v in q.items() if v not in ("", 0, None))
 
     projects_html = ""
     for p in projects:
         color = rag_colors.get(p[3], "#8b90a0")
         rag_label = str(p[3]).upper() if p[3] else "NO STATUS"
+        active = "outline:2px solid #5ab0ff;" if project == p[0] else ""
         projects_html += f"""
-        <div class='card'>
+        <a href='{link(project=p[0])}' class='card' style='text-decoration:none;color:inherit;{active}'>
             <div class='rag-bar' style='background:{color};'></div>
-            <h3>{p[1]}</h3>
+            <h3>{esc(p[1] or '')}</h3>
             <span class='rag-pill' style='color:{color};background:{color}1f;'>● {rag_label}</span>
-            <p class='meta'>{p[2]}</p>
-        </div>"""
+            <p class='meta'>{esc(p[2] or '')}</p>
+        </a>"""
 
     tasks_html = ""
     for t in tasks:
-        priority_color = {"high": "#ff6b6b", "medium": "#f5a623", "low": "#2bd4a0"}.get(t[3], "#8b90a0")
-        is_complete = t[4] == "complete"
-        row_class = "complete" if is_complete else ""
+        is_complete = t["status"] == "complete"
         action_btn = f"""
-            <form method='post' action='/reopen/{t[0]}' style='display:inline'>
-                <button type='submit' class='btn btn-reopen'>
-                    <i class='ti ti-rotate'></i> Reopen
-                </button>
+            <form method='post' action='/reopen/{t["id"]}' style='display:inline'>
+                <button type='submit' class='btn btn-reopen'><i class='ti ti-rotate'></i> Reopen</button>
             </form>""" if is_complete else f"""
-            <form method='post' action='/complete/{t[0]}' style='display:inline'>
-                <button type='submit' class='btn btn-done'>
-                    <i class='ti ti-check'></i> Done
-                </button>
+            <form method='post' action='/complete/{t["id"]}' style='display:inline'>
+                <button type='submit' class='btn btn-done'><i class='ti ti-check'></i> Done</button>
             </form>"""
-
-        task_text = f"<s>{t[1]}</s>" if is_complete else t[1]
-        prio_text = t[3] or "—"
-        prio_html = f"<span class='prio' style='color:{priority_color};'>● {prio_text}</span>" if t[3] else "<span style='color:#565a6b;'>—</span>"
+        desc = esc(t["description"] or "")
+        if t.get("source_url"):
+            desc += f" <a href='{esc(t['source_url'])}' target='_blank' title='Open the email' style='color:#5ab0ff;'><i class='ti ti-mail'></i></a>"
+        if t.get("blocking"):
+            desc += " <span style='color:#c792ea;font-size:12px;'>blocking</span>"
+        task_text = f"<s>{desc}</s>" if is_complete else desc
+        court = (f"Waiting: {esc(t['waiting_on'])}" if t.get("waiting_on") else "Waiting") \
+            if t.get("ball_in_court") == "waiting" else "You"
+        tier = t.get("tier")
+        tier_html = (f"<span class='prio' style='color:{tier_colors[tier]};'>● {reg.TIER_LABELS[tier]}</span>"
+                     if tier else "<span style='color:#565a6b;'>—</span>")
         tasks_html += f"""
-        <tr class='{row_class}'>
+        <tr class='{"complete" if is_complete else ""}'>
+            <td style='color:#6b7080;'>#{t["id"]}</td>
             <td>{task_text}</td>
-            <td style='color:#6b7080;'>{t[2] if t[2] else '—'}</td>
-            <td>{prio_html}</td>
-            <td style='color:#6b7080;'>{t[5] or 'No project'}</td>
+            <td style='color:#6b7080;'>{esc(t.get("project") or "No project")}</td>
+            <td style='color:#6b7080;'>{court}</td>
+            <td style='color:#6b7080;'>{reg.short_date(t["due_date"]) if t["due_date"] else "—"}</td>
+            <td>{tier_html}</td>
             <td>{action_btn}</td>
         </tr>"""
+    if not tasks:
+        tasks_html = "<tr><td colspan='7' class='empty'>Nothing here.</td></tr>"
 
-    open_cls = "active" if filter == "open" else ""
-    complete_cls = "active" if filter == "complete" else ""
-    all_cls = "active" if filter == "all" else ""
+    def chip(label, href, on):
+        return f"<a href='{href}' class='filter-btn {'active' if on else ''}'>{label}</a>"
+
+    title = "Master register"
+    if project:
+        title = next((f"{p[1]} register" for p in projects if p[0] == project), "Project register")
+    filters = (chip("Open, ranked", link(filter="open"), filter == "open")
+               + chip("Completed", link(filter="complete"), filter == "complete")
+               + chip("All", link(filter="all"), filter == "all")
+               + "<span style='display:inline-block;width:18px;'></span>"
+               + chip("Everyone", link(ball=""), not ball)
+               + chip("Mine", link(ball="me"), ball == "me")
+               + chip("Waiting on others", link(ball="waiting"), ball == "waiting")
+               + (chip("All projects", link(project=0), False) if project else ""))
 
     return f"""
     <html>
@@ -906,7 +935,7 @@ def home(filter: str = "open", email: str = Depends(require_auth)):
     <body>
         {header_html(email, "dashboard")}
         <div class='container'>
-            <div class='section-title'>Projects</div>
+            <div class='section-title'>Projects <span style='color:#565a6b;font-weight:400;'>(tap one for its register)</span></div>
             <div class='cards'>
                 {projects_html}
                 <div class='stat-card'>
@@ -918,18 +947,16 @@ def home(filter: str = "open", email: str = Depends(require_auth)):
                     <div class='label'>Completed</div>
                 </div>
             </div>
-            <div class='section-title'>Tasks</div>
-            <div class='filters'>
-                <a href='/?filter=open' class='filter-btn {open_cls}'>Open</a>
-                <a href='/?filter=complete' class='filter-btn {complete_cls}'>Completed</a>
-                <a href='/?filter=all' class='filter-btn {all_cls}'>All</a>
-            </div>
+            <div class='section-title'>{esc(title)} ({len(tasks)})</div>
+            <div class='filters'>{filters}</div>
             <table>
                 <tr>
+                    <th>#</th>
                     <th>Task</th>
-                    <th>Due Date</th>
-                    <th>Priority</th>
                     <th>Project</th>
+                    <th>Court</th>
+                    <th>Due</th>
+                    <th>Rank</th>
                     <th>Action</th>
                 </tr>
                 {tasks_html}

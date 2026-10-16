@@ -61,7 +61,7 @@ You have read tools (safe, run them whenever useful) and write tools (change the
 For READ tools (list_open_tasks, list_projects, get_project_details, lookup_person, list_people, list_leads, list_project_files, list_calendar_events, find_free_time, search_email, read_email, review_email_attachment):
 - Just call them when they help answer the question. No need to ask permission.
 
-For WRITE tools (mark_task_complete, reopen_task, create_task, add_risk, create_person, update_person, create_project, update_project, create_lead, add_project_note, create_calendar_event, update_calendar_event, delete_calendar_event, reply_to_email):
+For WRITE tools (mark_task_complete, reopen_task, create_task, update_task, add_risk, create_person, update_person, create_project, update_project, create_lead, add_project_note, create_calendar_event, update_calendar_event, delete_calendar_event, reply_to_email):
 - You must ALWAYS propose first, then wait for the user to confirm before executing.
 - To propose, describe in plain text what you intend to do and ASK for confirmation. Be specific (task IDs, exact text, due dates).
 - Do NOT call the write tool on the same turn as the proposal.
@@ -87,6 +87,12 @@ For WRITE tools (mark_task_complete, reopen_task, create_task, add_risk, create_
 - Never guess an email address. Use lookup_person, or search_email by the person's name to find an address they've written from. If you can't find one, ask James for it.
 - Propose every new email before sending, showing To, Cc (if any), Subject and the COMPLETE body exactly as it will go out. Never invent dates, figures or commitments; use [brackets] for anything James must supply and ask him for it, rather than proposing an email that still has brackets.
 - If James asks for changes, show the whole revised email again as a new proposal. Only call send_new_email after he confirms, with exactly the recipients, subject and text he approved. One email per proposal.
+
+# The action-item register
+- Tasks are MCM's one action-item register. Each has a project, a due date (7 days out if none given), and a ball_in_court: 'me' (James owes it) or 'waiting' (someone owes James, named in waiting_on).
+- list_open_tasks returns the register already ranked: tier 1 overdue, 2 due within 48h, 3 blocking or high, 4 waiting with no movement 5+ days, 5 the rest. Keep that order when you list tasks.
+- When creating a task, set ball_in_court and waiting_on from the wording ("waiting on the survey from Fortin" -> waiting, waiting_on Fortin). Mark blocking only for a client decision, or something holding up a permit, submittal, pay app or site work.
+- To change a task (new date, different project, now waiting on someone) use update_task.
 
 # Projects
 - Before creating a project, check list_projects so you don't add a duplicate under a slightly different name.
@@ -131,10 +137,11 @@ TOOLS = [
     # ---------- READ TOOLS ----------
     {
         "name": "list_open_tasks",
-        "description": "List open tasks across all projects. Optionally filter by project name, assignee name, or a due-date window. Returns task id, description, due date, priority, project, and assignee.",
+        "description": "The action-item register: open tasks, most urgent first (tier 1 overdue, 2 due within 48h, 3 blocking/high, 4 waiting-on with no movement 5+ days, 5 the rest). Optionally filter by project name, assignee, whose court the ball is in, or a due-date window. Returns id, description, due date, tier, ball_in_court, waiting_on, blocking, project, assignee.",
         "input_schema": {
             "type": "object",
             "properties": {
+                "ball_in_court": {"type": "string", "enum": ["me", "waiting"], "description": "'me' = James's own to-dos; 'waiting' = things others owe him."},
                 "project_name": {"type": "string", "description": "Filter to tasks on a specific project. Substring match, case-insensitive."},
                 "assignee_name": {"type": "string", "description": "Filter to tasks assigned to a specific person. Substring match, case-insensitive."},
                 "due_before": {"type": "string", "description": "Only tasks with due_date on or before this YYYY-MM-DD."},
@@ -297,10 +304,13 @@ TOOLS = [
     },
     {
         "name": "create_task",
-        "description": "Create a new task. REQUIRES prior user confirmation in this conversation.",
+        "description": "Add an item to the action-item register. REQUIRES prior user confirmation in this conversation. No due date given = 7 days out.",
         "input_schema": {
             "type": "object",
             "properties": {
+                "ball_in_court": {"type": "string", "enum": ["me", "waiting"], "description": "'me' (default) if James has to do it; 'waiting' if he is waiting on someone."},
+                "waiting_on": {"type": "string", "description": "Who James is waiting on (person or firm). Only with ball_in_court 'waiting'."},
+                "blocking": {"type": "boolean", "description": "True for a client decision, or anything holding up a permit, submittal, pay app or site work."},
                 "description": {"type": "string", "description": "Task description. Required."},
                 "project_name": {"type": "string", "description": "Project to attach the task to. Substring match. Optional."},
                 "assignee_name": {"type": "string", "description": "Person to assign to. Substring match. Optional."},
@@ -308,6 +318,24 @@ TOOLS = [
                 "priority": {"type": "string", "enum": ["high", "medium", "low"], "description": "Default 'medium'."},
             },
             "required": ["description"],
+        },
+    },
+    {
+        "name": "update_task",
+        "description": "Change a task in the register: due date, project, description, whose court it's in, who it's waiting on, blocking or priority. REQUIRES prior user confirmation.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer"},
+                "description": {"type": "string"},
+                "project_name": {"type": "string"},
+                "due_date": {"type": "string", "description": "YYYY-MM-DD"},
+                "ball_in_court": {"type": "string", "enum": ["me", "waiting"]},
+                "waiting_on": {"type": "string"},
+                "blocking": {"type": "boolean"},
+                "priority": {"type": "string", "enum": ["high", "medium", "low"]},
+            },
+            "required": ["task_id"],
         },
     },
     {
@@ -493,7 +521,7 @@ TOOLS = [
 ]
 
 
-WRITE_TOOLS = {"mark_task_complete", "reopen_task", "create_task", "add_risk", "create_person", "update_person",
+WRITE_TOOLS = {"mark_task_complete", "reopen_task", "create_task", "update_task", "add_risk", "create_person", "update_person",
                "create_project", "update_project", "reply_to_email", "send_new_email",
                "create_lead", "add_project_note", "create_calendar_event", "update_calendar_event",
                "delete_calendar_event"}
@@ -520,38 +548,34 @@ def _clean(d):
 
 
 def tool_list_open_tasks(args: dict) -> dict:
-    conn = get_connection()
-    cur = conn.cursor()
-    sql = """
-        SELECT t.id, t.description, t.due_date, t.priority, t.status,
-               p.name AS project, pe.name AS assignee
-          FROM tasks t
-          LEFT JOIN projects p  ON t.project_id  = p.id
-          LEFT JOIN people  pe ON t.assignee_id = pe.id
-         WHERE t.status = 'open'
-    """
-    params = []
-    if args.get("project_name"):
-        sql += " AND LOWER(p.name) LIKE %s"
-        params.append(f"%{args['project_name'].lower()}%")
-    if args.get("assignee_name"):
-        sql += " AND LOWER(pe.name) LIKE %s"
-        params.append(f"%{args['assignee_name'].lower()}%")
-    if args.get("due_before"):
-        sql += " AND t.due_date <= %s"
-        params.append(args["due_before"])
-    if args.get("due_after"):
-        sql += " AND t.due_date >= %s"
-        params.append(args["due_after"])
-    sql += " ORDER BY t.due_date ASC NULLS LAST, t.priority DESC"
-    limit = args.get("limit") or 50
-    sql += f" LIMIT {int(limit)}"
-
-    cur.execute(sql, params)
-    rows = [_clean(_row_to_dict(cur, r)) for r in cur.fetchall()]
-    cur.close()
-    conn.close()
-    return {"count": len(rows), "tasks": rows}
+    import register as reg
+    rows = reg.get_register(project=args.get("project_name") or None,
+                            ball=args.get("ball_in_court") or None)
+    if args.get("assignee_name") or args.get("due_before") or args.get("due_after"):
+        conn = get_connection()
+        cur = conn.cursor()
+        assignees = {}
+        if args.get("assignee_name"):
+            cur.execute("""SELECT t.id FROM tasks t JOIN people pe ON pe.id = t.assignee_id
+                           WHERE t.status = 'open' AND LOWER(pe.name) LIKE %s""",
+                        (f"%{args['assignee_name'].lower()}%",))
+            assignees = {r[0] for r in cur.fetchall()}
+            rows = [r for r in rows if r["id"] in assignees]
+        cur.close()
+        conn.close()
+        if args.get("due_before"):
+            rows = [r for r in rows if r["due_date"] and r["due_date"].isoformat() <= args["due_before"]]
+        if args.get("due_after"):
+            rows = [r for r in rows if r["due_date"] and r["due_date"].isoformat() >= args["due_after"]]
+    limit = int(args.get("limit") or 50)
+    keep = ("id", "description", "due_date", "tier", "ball_in_court", "waiting_on", "blocking",
+            "priority", "project", "idle_days", "source")
+    tasks = []
+    for r in rows[:limit]:
+        d = {k: _serialize(r.get(k)) for k in keep}
+        d["tier_label"] = reg.TIER_LABELS.get(r["tier"])
+        tasks.append(d)
+    return {"count": len(rows), "returned": len(tasks), "tasks": tasks}
 
 
 def tool_list_projects(args: dict) -> dict:
@@ -656,20 +680,15 @@ def tool_mark_task_complete(args: dict) -> dict:
     task_ids = args.get("task_ids") or []
     if not task_ids:
         return {"error": "No task_ids provided."}
-    conn = get_connection()
-    cur = conn.cursor()
+    import register as reg
     completed = []
     not_found = []
     for tid in task_ids:
-        cur.execute("UPDATE tasks SET status = 'complete' WHERE id = %s RETURNING id, description", (tid,))
-        row = cur.fetchone()
-        if row:
-            completed.append({"task_id": row[0], "description": row[1]})
+        t = reg.complete_task(int(tid))       # also completes the Outlook flag, if it came from one
+        if t:
+            completed.append({"task_id": t["id"], "description": t["description"]})
         else:
             not_found.append(tid)
-    conn.commit()
-    cur.close()
-    conn.close()
     return {
         "ok": True,
         "completed_count": len(completed),
@@ -709,35 +728,52 @@ def _resolve_person_id(cur, name: Optional[str]) -> Optional[int]:
 
 
 def tool_create_task(args: dict) -> dict:
+    import register as reg
     conn = get_connection()
     cur = conn.cursor()
     project_id = _resolve_project_id(cur, args.get("project_name"))
     assignee_id = _resolve_person_id(cur, args.get("assignee_name"))
-    cur.execute(
-        """
-        INSERT INTO tasks (description, project_id, assignee_id, due_date, priority, status, source)
-        VALUES (%s, %s, %s, %s, %s, 'open', 'rowan_chat')
-        RETURNING id
-        """,
-        (
-            args["description"],
-            project_id,
-            assignee_id,
-            args.get("due_date"),
-            args.get("priority", "medium"),
-        ),
-    )
-    new_id = cur.fetchone()[0]
-    conn.commit()
     cur.close()
     conn.close()
+    res = reg.add_task(
+        args["description"], project_id=project_id, assignee_id=assignee_id,
+        due_date=args.get("due_date"), priority=args.get("priority", "medium"),
+        ball_in_court=args.get("ball_in_court") or "me", waiting_on=args.get("waiting_on"),
+        blocking=bool(args.get("blocking")), source="rowan_chat",
+    )
+    t = reg.get_task(res["id"])
     return {
         "ok": True,
-        "task_id": new_id,
+        "task_id": res["id"],
         "description": args["description"],
         "project_id": project_id,
         "assignee_id": assignee_id,
+        "due_date": _serialize(t["due_date"]) if t else None,
+        "ball_in_court": t["ball_in_court"] if t else None,
     }
+
+
+def tool_update_task(args: dict) -> dict:
+    import register as reg
+    tid = int(args["task_id"])
+    if not reg.get_task(tid):
+        return {"error": f"No task with id {tid}"}
+    fields = {k: args[k] for k in ("description", "due_date", "ball_in_court", "waiting_on",
+                                   "blocking", "priority") if k in args}
+    if args.get("project_name"):
+        pid = reg.resolve_project(args["project_name"])
+        if not pid:
+            return {"error": f"No single project matching '{args['project_name']}'"}
+        fields["project_id"] = pid
+    if fields.get("waiting_on") and "ball_in_court" not in fields:
+        fields["ball_in_court"] = "waiting"
+    if fields.get("ball_in_court") == "me":
+        fields["waiting_on"] = None
+    reg.update_task(tid, **fields)
+    t = reg.get_task(tid)
+    return {"ok": True, "task": {k: _serialize(t.get(k)) for k in
+                                 ("id", "description", "project", "due_date", "ball_in_court",
+                                  "waiting_on", "blocking", "priority")}}
 
 
 def tool_add_risk(args: dict) -> dict:
@@ -1235,6 +1271,7 @@ TOOL_DISPATCH = {
     "mark_task_complete":  tool_mark_task_complete,
     "reopen_task":         tool_reopen_task,
     "create_task":         tool_create_task,
+    "update_task":         tool_update_task,
     "add_risk":            tool_add_risk,
     "create_person":       tool_create_person,
     "update_person":       tool_update_person,

@@ -8,7 +8,9 @@ What James can do from @miamirowan_bot:
   - send a voice note: transcribed, then turned into proposed tasks and notes
   - send a site photo or a PDF: Rowan reads it, files it to OneDrive under
     the project, and replies (a review, for documents)
-  - /task /lead /note: one-line capture, confirmed with one tap
+  - /task /wait: straight into the action-item register (register.py), with Undo
+  - /lead /note: one-line capture, confirmed with one tap
+  - /list /waiting /done /review /minutes /flags: the register (register_telegram.py)
   - approve email replies: Send / Edit / Discard / Later
 
 Safety rules:
@@ -59,7 +61,16 @@ HELP_TEXT = (
     "/project 71 NoBE - one project's status\n"
     "/leads - the pipeline\n"
     "/linkedin - draft a LinkedIn post now (one also comes daily at 9am)\n\n"
-    "/task call Greg re: pool tile Friday\n"
+    "ACTION ITEMS\n"
+    "/task send Soundbath budget to Vishal Friday - something you owe\n"
+    "/wait survey from Fortin, 71 NoBE, Tuesday - something you're waiting on\n"
+    "/done 12 15 - close tasks\n"
+    "/list - master register, most urgent first; /list grotto - one project\n"
+    "/waiting - everything you're waiting on\n"
+    "/review - action items waiting for your OK\n"
+    "/minutes 71 NoBE - then send the transcript, notes, a voice note or a PDF\n"
+    "/flags - pull in flagged Outlook emails now (they also sync every 20 min)\n"
+    "/morning - send today's exceptions list now\n\n"
     "/lead Jane Doe, developer, Key Largo spec home\n"
     "/note 71 NoBE: owner approved the lobby finish upgrade\n"
     "/scan - check my inbox now and draft anything that needs a reply\n"
@@ -597,7 +608,6 @@ def _briefing_prompt(cmd: str, rest: str):
 
 
 CAPTURE_PREFIX = {
-    "task": "Quick capture (task)",
     "lead": "Quick capture (lead)",
     "note": "Quick capture (project note)",
 }
@@ -639,6 +649,19 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
             return Response(status_code=204)
 
         action, _, ref = (callback.get("data") or "").partition(":")
+
+        # Register buttons edit their own message instead of losing all buttons.
+        if action in ("rk", "rx", "rkall", "rxall"):
+            _answer_callback(callback.get("id", ""), "Got it")
+            from register_telegram import proposal_action
+            background.add_task(proposal_action, action, ref, message)
+            return done
+        if action in ("tu", "tp", "td", "tsn", "tch"):
+            _answer_callback(callback.get("id", ""), "Got it")
+            from register_telegram import task_action
+            background.add_task(task_action, action, ref, message)
+            return done
+
         _answer_callback(callback.get("id", ""), "Got it")
         _remove_buttons(message.get("message_id"))
 
@@ -694,6 +717,29 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
 
     caption = (message.get("caption") or "").strip()
 
+    # Meeting minutes mode (/minutes <project>): the next text, voice note or file is the material.
+    import register_telegram as regtg
+    minutes_project = regtg.minutes_target()
+    text_in = (message.get("text") or "").strip()
+    if minutes_project and not text_in.startswith("/"):
+        voice = message.get("voice") or message.get("audio")
+        doc = message.get("document")
+        if voice:
+            background.add_task(regtg.minutes_from_voice, minutes_project, voice.get("file_id"),
+                                voice.get("file_size") or 0, voice.get("file_name"))
+            return done
+        if doc:
+            background.add_task(regtg.minutes_from_file, minutes_project, doc.get("file_id"),
+                                doc.get("file_size") or 0, doc.get("mime_type") or "", doc.get("file_name"))
+            return done
+        if text_in.lower() in ("cancel", "stop", "never mind", "nevermind"):
+            state_set("minutes_mode", {})
+            send_message("Minutes cancelled.")
+            return done
+        if text_in:
+            background.add_task(regtg.run_minutes, minutes_project, text_in)
+            return done
+
     # Voice note or audio file
     voice = message.get("voice") or message.get("audio")
     if voice:
@@ -722,6 +768,49 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
         return Response(status_code=204)
 
     cmd, rest = _command(text)
+    if text.startswith("/"):
+        # keep line breaks after the command (pasted minutes), _command() flattens nothing
+        rest_full = text.split(None, 1)[1] if len(text.split(None, 1)) > 1 else ""
+    else:
+        rest_full = rest
+
+    # ---------- the action-item register ----------
+    if cmd in ("task", "wait"):
+        if not rest:
+            send_message("Add the details, e.g. /task send revised budget to Vishal Friday"
+                         if cmd == "task" else
+                         "Add the details, e.g. /wait survey from the surveyor, 71 NoBE, Tuesday")
+            return done
+        background.add_task(regtg.capture, rest, cmd == "wait")
+        return done
+    if cmd == "done" and text.startswith("/"):
+        background.add_task(regtg.done, rest)
+        return done
+    if cmd in ("list", "register"):
+        background.add_task(regtg.send_list, rest)
+        return done
+    if cmd == "waiting":
+        background.add_task(regtg.send_waiting)
+        return done
+    if cmd == "review":
+        background.add_task(regtg.review)
+        return done
+    if cmd == "minutes":
+        background.add_task(regtg.start_minutes, rest_full)
+        return done
+    if cmd == "flags":
+        send_message("Checking your Outlook flags...")
+        background.add_task(regtg.flags_now)
+        return done
+    if cmd == "morning":
+        from digest import morning_push
+
+        def _morning_now():
+            stats = morning_push()
+            if not stats["exceptions"] and not stats["proposals_sent"]:
+                send_message("Nothing overdue, due in 48h, or stale. Nothing new to review.")
+        background.add_task(_morning_now)
+        return done
 
     if cmd in ("start", "help"):
         send_message(HELP_TEXT)

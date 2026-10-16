@@ -81,18 +81,45 @@ def run_step(label, fn):
         report_failure(label)
 
 
-def run_daily_jobs():
-    if not should_run_job("daily"):
-        log("Daily jobs already ran today, skipping.")
+# The old 8am inbox scan (gmail_reader / outlook_reader -> every action item in
+# every email) and the daily summary email (reminders.py) are retired: they were
+# the noise. Action items now come in through register capture (capture.py)
+# and the only daily push is the 7am exceptions list (digest.py).
+
+
+def run_sent_mail_scan():
+    """Weekdays 6:40 — proposals from mail James sent. Nothing enters the register without his OK."""
+    if datetime.now().weekday() >= 5:
         return
-    log("Running daily jobs...")
-    from gmail_reader import scan_gmail_for_tasks
-    from outlook_reader import scan_outlook_for_tasks
-    from reminders import run_reminders
-    run_step("gmail scan", lambda: scan_gmail_for_tasks(2))
-    run_step("outlook scan", lambda: scan_outlook_for_tasks(1))
-    run_step("reminders", run_reminders)
-    log("Daily jobs complete.")
+    if not should_run_job("sent_mail_scan"):
+        return
+    from capture import scan_sent_mail
+    log(f"Sent-mail scan: {scan_sent_mail()}")
+
+
+def run_morning_push():
+    """Weekdays 7:00 — exceptions only (silent if none), then the proposal batch. Mondays add the review."""
+    if datetime.now().weekday() >= 5:
+        return
+    if not should_run_job("morning_push"):
+        log("Morning push already ran today, skipping.")
+        return
+    from digest import morning_push, monday_review
+    run_step("morning push", lambda: log(f"Morning push: {morning_push()}"))
+    if datetime.now().weekday() == 0:
+        run_step("monday review", lambda: log(f"Monday review sent: {monday_review()}"))
+
+
+def run_flag_sync():
+    """Every 20 min, 6am-9pm: flagged Outlook emails -> tasks; replies on waiting threads reset the stale clock."""
+    if not 6 <= datetime.now().hour < 21:
+        return
+    from capture import sync_flagged, touch_replied_threads
+    from register_telegram import notify_flag_task
+    stats = sync_flagged(notify=notify_flag_task)
+    if stats["added"] or stats["closed"]:
+        log(f"Flag sync: {stats}")
+    run_step("waiting-thread touch", lambda: touch_replied_threads(hours=12))
 
 
 def run_weekly_jobs():
@@ -156,8 +183,12 @@ def run_email_reply_job():
 
 
 # ----- Schedule -----
-schedule.every().day.at("08:00").do(safe("daily jobs", run_daily_jobs))
 schedule.every().monday.at("08:00").do(safe("weekly jobs", run_weekly_jobs))
+
+# Action-item register (register.py / capture.py / digest.py)
+schedule.every().day.at("06:40").do(safe("sent mail scan", run_sent_mail_scan))
+schedule.every().day.at("07:00").do(safe("morning push", run_morning_push))
+schedule.every(20).minutes.do(safe("flag sync", run_flag_sync))
 schedule.every().day.at("09:00").do(safe("LinkedIn draft", run_linkedin_draft_job))
 
 # Rowan email reply drafts — weekdays, morning and early afternoon
@@ -169,13 +200,20 @@ schedule.every().day.at("13:00").do(safe("email reply pass", run_email_reply_job
 # schedule.every().day.at("12:00").do(safe("nudge pass", run_nudges_job))
 
 log("Scheduler started.")
-log("- Gmail and Outlook scanned every day at 8am.")
-log("- Reminders run every day at 8am.")
+log("- Register: flagged Outlook emails synced every 20 min (6am-9pm).")
+log("- Register: sent-mail proposals at 6:40, morning exceptions push at 7:00, weekdays (Mondays + portfolio review).")
+log("- Inbox task scan and daily summary email: retired.")
 log("- Status reports run every Monday at 8am.")
 log("- LinkedIn draft sent every day at 9am (Telegram, or email if Telegram is off).")
 log("- Email reply drafts prepared at 08:15 / 13:00, weekdays only.")
 log("- Rowan nudges: disabled.")
 check_database()
+try:
+    from register import ensure_register_schema
+    ensure_register_schema()
+    log("Register schema OK.")
+except Exception:
+    report_failure("register schema")
 
 last_heartbeat = time.monotonic()
 
