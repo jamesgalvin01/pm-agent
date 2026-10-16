@@ -76,6 +76,7 @@ HELP_TEXT = (
     "/note 71 NoBE: owner approved the lobby finish upgrade\n"
     "/scan - check my inbox now and draft anything that needs a reply\n"
     "/pending - show the email draft waiting for approval\n"
+    "/clear - discard waiting email drafts in bulk (asks first; nothing is sent)\n"
     "/new - start a fresh conversation (clears my short-term context)"
 )
 
@@ -667,7 +668,17 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
         _answer_callback(callback.get("id", ""), "Got it")
         _remove_buttons(message.get("message_id"))
 
-        if action in ("send", "sendtask", "no", "later"):
+        if action in ("clrall", "clrold", "clrno"):
+            def _clear(kind=action):
+                from approvals import discard_all_drafts, notify_next_email_draft
+                if kind == "clrno":
+                    send_message("Cancelled. Nothing discarded.")
+                    return
+                n = discard_all_drafts(before_today=(kind == "clrold"))
+                send_message(f"Discarded {n} draft{'s' if n != 1 else ''}. Nothing was sent.")
+                notify_next_email_draft()
+            background.add_task(_clear)
+        elif action in ("send", "sendtask", "no", "later"):
             word = {"send": "SEND", "sendtask": "SEND+TASK", "no": "NO", "later": "LATER"}[action]
             background.add_task(apply_draft_answer, word)
         elif action == "edit":
@@ -829,6 +840,20 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
         # claiming there's nothing - the queue only ever holds one open.
         if not (resend_pending_draft() or notify_next_email_draft()):
             send_message("Nothing waiting on you.")
+        return done
+
+    if cmd == "clear" and text.startswith("/"):
+        from approvals import pending_draft_counts
+        c = pending_draft_counts()
+        if not c["all"]:
+            send_message("No email drafts waiting. Nothing to clear.")
+            return done
+        rows = [[{"text": f"Discard all {c['all']}", "callback_data": "clrall:0"}]]
+        if 0 < c["before_today"] < c["all"]:
+            rows.append([{"text": f"Only older than today ({c['before_today']})", "callback_data": "clrold:0"}])
+        rows.append([{"text": "Cancel", "callback_data": "clrno:0"}])
+        send_message(f"{c['all']} email drafts are waiting for you. Discard them? Nothing is sent, "
+                     "and the emails stay in Outlook as they are.", reply_markup={"inline_keyboard": rows})
         return done
 
     if cmd == "new":

@@ -423,3 +423,48 @@ def _after_send(draft_id, make_task: bool = False) -> None:
         else:
             send_message("I didn't find a commitment in that reply, so nothing was added. "
                          "Use /task if you want one.")
+
+
+# ============================================================
+# BULK DISCARD  (/clear on Telegram)
+# ============================================================
+
+def pending_draft_counts() -> dict:
+    """How many drafts are waiting: all, and received before today (Eastern)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT COUNT(*),
+               COUNT(*) FILTER (WHERE received_at < date_trunc('day', NOW() AT TIME ZONE 'America/New_York')
+                                                    AT TIME ZONE 'America/New_York')
+          FROM email_drafts WHERE status = 'pending'
+    """)
+    total, older = cur.fetchone()
+    cur.close()
+    conn.close()
+    return {"all": total, "before_today": older}
+
+
+def discard_all_drafts(before_today: bool = False) -> int:
+    """
+    Discard every waiting draft (or only those received before today).
+    Nothing is sent and the emails stay in Outlook untouched. Returns how many.
+    """
+    sql = """UPDATE email_drafts SET status = 'discarded', decided_at = NOW(), approved_via = 'bulk'
+              WHERE status = 'pending'"""
+    if before_today:
+        sql += """ AND received_at < date_trunc('day', NOW() AT TIME ZONE 'America/New_York')
+                                      AT TIME ZONE 'America/New_York'"""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(sql)
+    n = cur.rowcount
+    conn.commit()
+    cur.close()
+    conn.close()
+    pending = get_pending()
+    if pending and pending.get("type") == "email_reply":
+        row = _draft_row(pending.get("draft_id"))
+        if not row or row[5] != "pending":
+            clear_pending()
+    return n
