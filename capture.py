@@ -510,3 +510,48 @@ def process_minutes(project_hint: str, text: str = None, pdf_bytes: bytes = None
         if pid:
             ids.append(pid)
     return {"project": pname, "project_id": project_id, "minutes": minutes, "proposal_ids": ids}
+
+
+# ============================================================
+# 5. "SEND + TASK"  (a reply James just approved)
+# ============================================================
+
+REPLY_PROMPT = """James Galvin just sent this email reply{to_part}. He tapped "Send + task", which means the reply commits him (or someone else) to something he wants on his action-item list.
+
+{context}
+{blocking_rule}
+
+Pick the ONE most important commitment in the reply:
+- something James promised to do -> ball_in_court "me"
+- something James asked them to deliver -> ball_in_court "waiting", waiting_on = them
+Ignore pleasantries and anything already done in the reply itself.
+
+Subject: {subject}
+
+Reply:
+{reply}
+
+Return ONLY one JSON object: {schema}
+If the reply truly contains no commitment, return {{"description": null}}."""
+
+
+def commitment_from_reply(reply: str, to: str = None, subject: str = "", conversation_id: str = None):
+    """Add the commitment in a just-sent reply to the register. Returns the task row, or None."""
+    reg.ensure_register_schema()
+    item = _ask_json(REPLY_PROMPT.format(
+        to_part=f" to {to}" if to else "", context=_context_block(), blocking_rule=BLOCKING_RULE,
+        subject=subject or "", reply=(reply or "")[:4000], schema=ITEM_SCHEMA), max_tokens=400)
+    if not isinstance(item, dict) or not item.get("description"):
+        return None
+    res = reg.add_task(
+        item["description"], project_id=reg.resolve_project(item.get("project")),
+        due_date=item.get("due_date"), ball_in_court=item.get("ball_in_court") or "me",
+        waiting_on=item.get("waiting_on"), blocking=bool(item.get("blocking")),
+        source="email_reply",
+        source_ref=f"thread:{conversation_id}" if conversation_id else None)
+    t = reg.get_task(res["id"])
+    if res["duplicate"]:
+        # The thread already has an open task: freshen it rather than duplicate.
+        reg.touch(res["id"])
+        t["already_tracked"] = True
+    return t

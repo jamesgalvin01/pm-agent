@@ -11,7 +11,8 @@ What James can do from @miamirowan_bot:
   - /task /wait: straight into the action-item register (register.py), with Undo
   - /lead /note: one-line capture, confirmed with one tap
   - /list /waiting /done /review /minutes /flags: the register (register_telegram.py)
-  - approve email replies: Send / Edit / Discard / Later
+  - approve email replies: Send / Send + task / Edit / Discard / Later. Drafts
+    arrive as emails land, 7am-7pm weekdays (graph_push.py)
 
 Safety rules:
   1. Telegram's webhook secret must match, or the request is rejected.
@@ -168,9 +169,10 @@ def _draft_keyboard(draft_id):
         "inline_keyboard": [
             [
                 {"text": "Send", "callback_data": f"send:{draft_id}"},
-                {"text": "Edit", "callback_data": f"edit:{draft_id}"},
+                {"text": "Send + task", "callback_data": f"sendtask:{draft_id}"},
             ],
             [
+                {"text": "Edit", "callback_data": f"edit:{draft_id}"},
                 {"text": "Discard", "callback_data": f"no:{draft_id}"},
                 {"text": "Later", "callback_data": f"later:{draft_id}"},
             ],
@@ -656,7 +658,7 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
             from register_telegram import proposal_action
             background.add_task(proposal_action, action, ref, message)
             return done
-        if action in ("tu", "tp", "td", "tsn", "tch"):
+        if action in ("tu", "tp", "td", "tsn", "tch", "tko"):
             _answer_callback(callback.get("id", ""), "Got it")
             from register_telegram import task_action
             background.add_task(task_action, action, ref, message)
@@ -665,8 +667,8 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
         _answer_callback(callback.get("id", ""), "Got it")
         _remove_buttons(message.get("message_id"))
 
-        if action in ("send", "no", "later"):
-            word = {"send": "SEND", "no": "NO", "later": "LATER"}[action]
+        if action in ("send", "sendtask", "no", "later"):
+            word = {"send": "SEND", "sendtask": "SEND+TASK", "no": "NO", "later": "LATER"}[action]
             background.add_task(apply_draft_answer, word)
         elif action == "edit":
             try:

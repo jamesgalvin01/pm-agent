@@ -109,6 +109,14 @@ def run_morning_push():
     if datetime.now().weekday() == 0:
         run_step("monday review", lambda: log(f"Monday review sent: {monday_review()}"))
 
+    # Overnight email: draft anything not yet triaged, then start the queue.
+    def overnight_email():
+        from email_replies import run_reply_draft_pass
+        from approvals import notify_next_email_draft
+        log(f"Overnight email pass: {run_reply_draft_pass(hours=36)}")
+        notify_next_email_draft(respect_hours=True)
+    run_step("overnight email", overnight_email)
+
 
 def run_flag_sync():
     """Every 20 min, 6am-9pm: flagged Outlook emails -> tasks; replies on waiting threads reset the stale clock."""
@@ -159,25 +167,19 @@ def run_nudges_job():
 
 def run_email_reply_job():
     """
-    Draft replies to inbox mail for James to approve on /emails.
-    Weekdays only. Nothing is sent here — drafts sit as 'pending' until
-    James clicks Approve & send. Idempotent: messages already in
-    email_drafts are skipped by graph_message_id.
+    Backup to real-time email (graph_push.py): every 15 minutes, draft replies
+    for anything in the inbox that hasn't been triaged yet. Drafts are offered
+    to James only 7am-7pm weekdays; outside that they wait for the 7am push.
+    Nothing is sent here. Idempotent: emails already in email_drafts are skipped.
     """
-    if datetime.now().weekday() >= 5:
-        return
-    log("Running email reply draft pass...")
     from email_replies import run_reply_draft_pass
-    stats = run_reply_draft_pass()
-    log(f"Email reply pass: {stats}")
-
-    # Send James the first draft for approval on whichever channel is live
-    # (APPROVAL_CHANNEL). The queue advances itself from the webhook as he
-    # answers each one. No-op when APPROVAL_CHANNEL is off.
+    stats = run_reply_draft_pass(hours=24)
+    if stats.get("drafted") or stats.get("errors"):
+        log(f"Email backup pass: {stats}")
     try:
         from approvals import notify_next_email_draft
-        if notify_next_email_draft():
-            log("Sent the first draft for approval.")
+        if notify_next_email_draft(respect_hours=True):
+            log("Offered a draft for approval.")
     except Exception:
         report_failure("email draft approval notify")
 
@@ -191,9 +193,9 @@ schedule.every().day.at("07:00").do(safe("morning push", run_morning_push))
 schedule.every(20).minutes.do(safe("flag sync", run_flag_sync))
 schedule.every().day.at("09:00").do(safe("LinkedIn draft", run_linkedin_draft_job))
 
-# Rowan email reply drafts — weekdays, morning and early afternoon
-schedule.every().day.at("08:15").do(safe("email reply pass", run_email_reply_job))
-schedule.every().day.at("13:00").do(safe("email reply pass", run_email_reply_job))
+# Email reply drafts: real time via graph_push.py (web service); this is the
+# 15-minute backup. Drafts reach James 7am-7pm weekdays only.
+schedule.every(15).minutes.do(safe("email backup pass", run_email_reply_job))
 
 # Rowan proactive nudges — DISABLED (James, Sep 2026: noon nudge was too much).
 # The job is still defined above; re-enable by uncommenting the line below.
@@ -205,7 +207,7 @@ log("- Register: sent-mail proposals at 6:40, morning exceptions push at 7:00, w
 log("- Inbox task scan and daily summary email: retired.")
 log("- Status reports run every Monday at 8am.")
 log("- LinkedIn draft sent every day at 9am (Telegram, or email if Telegram is off).")
-log("- Email reply drafts prepared at 08:15 / 13:00, weekdays only.")
+log("- Email reply drafts: real time as mail arrives, 15-min backup; offered 7am-7pm weekdays.")
 log("- Rowan nudges: disabled.")
 check_database()
 try:

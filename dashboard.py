@@ -24,6 +24,7 @@ from chat import router as chat_router
 from sms_webhook import router as sms_router
 from telegram_bot import router as telegram_router
 from app_shell import router as app_shell_router, APP_HEAD, MOBILE_CSS, tab_bar
+from graph_push import router as graph_push_router, start_keeper as start_graph_keeper
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 
@@ -34,6 +35,16 @@ app.include_router(chat_router)
 app.include_router(sms_router)
 app.include_router(telegram_router)
 app.include_router(app_shell_router)     # manifest + icons for the phone app
+app.include_router(graph_push_router)    # /graph/notify: real-time new-email notifications
+
+
+@app.on_event("startup")
+def _start_realtime_email():
+    """Keep the Microsoft inbox subscription alive (renews every ~2 days)."""
+    try:
+        start_graph_keeper()
+    except Exception as e:
+        print(f"[startup] real-time email keeper failed to start: {e}")
 
 
 @app.middleware("http")

@@ -21,6 +21,7 @@ Buttons (callback data, all short):
   td:<id>             done
   tsn:<id>            push due date 3 days
   tch:<id>            draft a chase email (goes through Rowan's confirm step)
+  tko:<id>            keep a task open (after a reply on its thread went out)
 """
 import time
 from datetime import timedelta
@@ -267,6 +268,11 @@ def task_action(action: str, ref: str, message: dict) -> None:
     t = reg.get_task(tid)
     if not t:
         _edit(msg_id, (message.get("text") or "") + "\n\n(That task no longer exists.)")
+        return
+
+    if action == "tko":
+        reg.touch(tid)
+        _edit(msg_id, f"Kept #{tid} open: {t['description']}")
         return
 
     if t["status"] == "complete" and action in ("td", "tsn", "tch"):

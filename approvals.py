@@ -16,6 +16,7 @@ on an explicit approval from James.
 import os
 import json
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from db import get_connection
 from outlook_mail import send_reply
@@ -35,6 +36,18 @@ DEFAULT_PENDING_TTL = 900
 APPROVE_WORDS = {"SEND", "YES", "Y", "CONFIRM", "OK", "OKAY", "GO", "APPROVE"}
 REJECT_WORDS = {"NO", "N", "CANCEL", "DISCARD", "DENY", "STOP"}
 DEFER_WORDS = {"LATER", "SKIP", "HOLD", "WAIT"}
+SEND_AND_TASK = "SEND+TASK"          # the "Send + task" button
+
+# Drafts are pushed to James as emails arrive only in working hours. Outside
+# them they wait, and the 7am morning push starts the queue.
+ET = ZoneInfo("America/New_York")
+WORK_START_HOUR, WORK_END_HOUR = 7, 19
+QUEUE_LOCK_KEY = 74221               # Postgres advisory lock: one sender at a time
+
+
+def in_working_hours(now=None) -> bool:
+    now = now or datetime.now(ET)
+    return now.weekday() < 5 and WORK_START_HOUR <= now.hour < WORK_END_HOUR
 
 
 # ============================================================
@@ -119,7 +132,7 @@ def _next_untexted_draft():
     cur = conn.cursor()
     cur.execute("""
         SELECT id, from_name, from_email, subject, draft_body, urgency,
-               body_preview, rationale, received_at
+               body_preview, rationale, received_at, task_id
           FROM email_drafts
          WHERE status = 'pending'
            AND draft_body IS NOT NULL
@@ -170,7 +183,7 @@ def _draft_for_message(draft_id):
     cur = conn.cursor()
     cur.execute("""
         SELECT id, from_name, from_email, subject, draft_body, urgency,
-               body_preview, rationale, received_at
+               body_preview, rationale, received_at, task_id
           FROM email_drafts WHERE id = %s
     """, (draft_id,))
     row = cur.fetchone()
@@ -182,7 +195,7 @@ def _draft_for_message(draft_id):
 def _send_draft(row) -> None:
     """Compose and deliver one draft for approval."""
     (draft_id, fname, femail, subject, draft_body, urgency,
-     incoming, rationale, received) = row
+     incoming, rationale, received, task_id) = row
     who = fname or femail or "unknown sender"
     flag = "⚠️ URGENT\n" if (urgency or "").lower() == "high" else ""
     when = received.strftime("%b %d, %I:%M %p").replace(" 0", " ") if received else ""
@@ -195,6 +208,14 @@ def _send_draft(row) -> None:
         header += f"\nReceived: {when}"
     if rationale:
         header += f"\nWhy: {rationale.strip()}"
+    if task_id:
+        try:
+            import register as reg
+            t = reg.get_task(task_id)
+            if t and t["status"] == "open":
+                header += f"\nOn your list: {reg.task_line(t)}"
+        except Exception as e:
+            print(f"[approvals] register line failed: {e}")
 
     _notify(
         f"{header}\n\n"
@@ -218,19 +239,39 @@ def resend_pending_draft() -> bool:
     return True
 
 
-def notify_next_email_draft() -> bool:
-    """Send James the next unreviewed draft. Returns True if one went out."""
+def notify_next_email_draft(respect_hours: bool = False) -> bool:
+    """
+    Send James the next unreviewed draft. Returns True if one went out.
+    respect_hours: automatic triggers (a new email, the 15-minute backup) pass
+    True so nothing buzzes his phone outside 7am-7pm weekdays. When he's
+    working through the queue himself, the next one follows regardless.
+    """
     if APPROVAL_CHANNEL not in ("telegram", "sms"):
         return False
-    if get_pending():
-        # Something is already awaiting his answer; never stack questions.
+    if respect_hours and not in_working_hours():
         return False
-    row = _next_untexted_draft()
-    if not row:
-        return False
-
-    set_pending({"type": "email_reply", "draft_id": row[0]})
-    _update("UPDATE email_drafts SET texted_at = NOW() WHERE id = %s", (row[0],))
+    # The web service (real-time path) and the worker (backup pass) can both
+    # get here at once; an advisory lock makes sure only one sends.
+    lock_conn = get_connection()
+    lock_cur = lock_conn.cursor()
+    try:
+        lock_cur.execute("SELECT pg_try_advisory_lock(%s)", (QUEUE_LOCK_KEY,))
+        if not lock_cur.fetchone()[0]:
+            return False
+        try:
+            if get_pending():
+                # Something is already awaiting his answer; never stack questions.
+                return False
+            row = _next_untexted_draft()
+            if not row:
+                return False
+            set_pending({"type": "email_reply", "draft_id": row[0]})
+            _update("UPDATE email_drafts SET texted_at = NOW() WHERE id = %s", (row[0],))
+        finally:
+            lock_cur.execute("SELECT pg_advisory_unlock(%s)", (QUEUE_LOCK_KEY,))
+    finally:
+        lock_cur.close()
+        lock_conn.close()
     _send_draft(row)
     return True
 
@@ -269,7 +310,7 @@ def handle_response(text: str) -> bool:
         notify_next_email_draft()
         return True
 
-    if upper in APPROVE_WORDS:
+    if upper in APPROVE_WORDS or upper == SEND_AND_TASK:
         if not (draft_body or "").strip():
             _notify("That draft is empty. Send me the reply you want to go out.")
             return True
@@ -289,6 +330,10 @@ def handle_response(text: str) -> bool:
         """, (sent_id, APPROVAL_CHANNEL, draft_id))
         clear_pending()
         _notify(f"Sent to {who}.")
+        try:
+            _after_send(draft_id, make_task=(upper == SEND_AND_TASK))
+        except Exception as e:
+            print(f"[approvals] after-send step failed: {e}")
         notify_next_email_draft()
         return True
 
@@ -328,3 +373,53 @@ def handle_response(text: str) -> bool:
         draft_id=draft_id,
     )
     return True
+
+
+# ============================================================
+# AFTER A REPLY GOES OUT  (the register)
+# ============================================================
+
+def _after_send(draft_id, make_task: bool = False) -> None:
+    """
+    "Send + task": turn the commitment in James's reply into a register task.
+    And if the thread was already on the register, offer to close that task.
+    Telegram only (buttons); a no-op on other channels.
+    """
+    if APPROVAL_CHANNEL != "telegram":
+        return
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""SELECT draft_body, conversation_id, task_id, from_name, from_email, subject
+                     FROM email_drafts WHERE id = %s""", (draft_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not row:
+        return
+    draft_body, conversation_id, task_id, fname, femail, subject = row
+    import register as reg
+    from telegram_bot import send_message
+
+    linked = reg.get_task(task_id) if task_id else None
+    if linked and linked["status"] == "open":
+        send_message(
+            f"This thread is on your list:\n{reg.task_line(linked)}\nClose it?",
+            reply_markup={"inline_keyboard": [[
+                {"text": f"Close #{linked['id']}", "callback_data": f"td:{linked['id']}"},
+                {"text": "Keep open", "callback_data": f"tko:{linked['id']}"},
+            ]]},
+        )
+
+    if make_task:
+        from capture import commitment_from_reply
+        from register_telegram import _capture_markup, _capture_text
+        t = commitment_from_reply(draft_body, to=fname or femail, subject=subject,
+                                  conversation_id=conversation_id)
+        if t and t.get("already_tracked"):
+            if not (linked and linked["id"] == t["id"]):
+                send_message(f"Already on your list, so I didn't add another:\n{reg.task_line(t)}")
+        elif t:
+            send_message(_capture_text(t), reply_markup=_capture_markup(t))
+        else:
+            send_message("I didn't find a commitment in that reply, so nothing was added. "
+                         "Use /task if you want one.")

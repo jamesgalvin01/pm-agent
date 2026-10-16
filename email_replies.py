@@ -9,7 +9,19 @@ Flow:
      own recent sent mail as style samples.
   4. Store every verdict in `email_drafts`. Drafts land as 'pending'.
 
-Nothing is sent here. Sending happens only from the /emails approval page.
+Two ways in (Oct 2026):
+  - real time: Microsoft notifies Rowan the moment mail lands (graph_push.py),
+    which calls process_message_id() for that one email
+  - backup: run_reply_draft_pass() every 15 minutes catches anything a
+    notification missed
+Both go through process_message(), which claims the email first so the two
+paths never draft the same message twice.
+
+If the email's thread is on the action-item register (register.py), the task
+is shown to Claude so the draft can acknowledge it, and is linked to the draft
+so Rowan can offer to close it once the reply is sent.
+
+Nothing is sent here. Sending happens only on James's approval.
 """
 import json
 import os
@@ -82,13 +94,18 @@ def ensure_schema():
     # James, so the queue never texts the same draft twice.
     cur.execute("ALTER TABLE email_drafts ADD COLUMN IF NOT EXISTS texted_at TIMESTAMPTZ")
     cur.execute("ALTER TABLE email_drafts ADD COLUMN IF NOT EXISTS approved_via TEXT")
+    # Oct 2026: register task this draft's thread belongs to (if any)
+    cur.execute("ALTER TABLE email_drafts ADD COLUMN IF NOT EXISTS task_id INTEGER")
     conn.commit()
     cur.close()
     conn.close()
 
 
 def _already_seen(cur, message_id: str) -> bool:
-    cur.execute("SELECT 1 FROM email_drafts WHERE graph_message_id = %s", (message_id,))
+    # A claim stuck in 'processing' for 10+ minutes (a crash) doesn't count, so it gets retried.
+    cur.execute("""SELECT 1 FROM email_drafts WHERE graph_message_id = %s
+                     AND NOT (status = 'processing' AND created_at < NOW() - INTERVAL '10 minutes')""",
+                (message_id,))
     return cur.fetchone() is not None
 
 
@@ -257,9 +274,45 @@ def _parse_json(raw: str) -> dict:
     return json.loads(clean[start:end])
 
 
-def triage_and_draft(msg: dict, body: str, thread: str, context: str, voice: str) -> dict:
+def _register_task_for_thread(conversation_id):
+    """The open register task tied to this email thread, if any."""
+    if not conversation_id:
+        return None
+    try:
+        import register as reg
+        reg.ensure_register_schema()
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""SELECT id FROM tasks WHERE status = 'open' AND source_ref = %s
+                        ORDER BY id DESC LIMIT 1""", (f"thread:{conversation_id}",))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return reg.get_task(row[0]) if row else None
+    except Exception as e:
+        print(f"[email_replies] register lookup failed: {e}")
+        return None
+
+
+def _register_block(task) -> str:
+    if not task:
+        return ""
+    who = (f"WAITING ON {task['waiting_on']}: " if task.get("ball_in_court") == "waiting"
+           and task.get("waiting_on") else ("WAITING: " if task.get("ball_in_court") == "waiting" else ""))
+    return (f"""<register>
+This email thread is on James's action-item register as task #{task['id']} \
+({task.get('project') or 'no project'}): {who}{task['description']} (due {task.get('due_date')}).
+If this email delivers or answers what that task is about, the reply should acknowledge it \
+(e.g. thank them for sending it). If it does not, ignore the task.
+</register>
+
+""")
+
+
+def triage_and_draft(msg: dict, body: str, thread: str, context: str, voice: str,
+                     register_task=None) -> dict:
     name, address = _sender(msg)
-    prompt = f"""<mcm_context>
+    prompt = f"""{_register_block(register_task)}<mcm_context>
 {context or "(no project data available)"}
 </mcm_context>
 
@@ -339,8 +392,114 @@ Return the complete revised reply body."""
 # PASS
 # ============================================================
 
+MAX_AGE_HOURS = 36          # never draft for an email older than this (e.g. moved back into the inbox)
+
+
+def _claim(cur, conn, msg: dict) -> bool:
+    """
+    Reserve this email for processing. False if another path already has it.
+    A claim that has sat in 'processing' for 10+ minutes (a crash) can be retaken.
+    """
+    name, address = _sender(msg)
+    cur.execute("""
+        INSERT INTO email_drafts (graph_message_id, conversation_id, from_name, from_email,
+                                  subject, received_at, status, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, 'processing', NOW())
+        ON CONFLICT (graph_message_id) DO UPDATE SET created_at = NOW()
+            WHERE email_drafts.status = 'processing'
+              AND email_drafts.created_at < NOW() - INTERVAL '10 minutes'
+        RETURNING id
+    """, (msg.get("id"), msg.get("conversationId"), name, address,
+          msg.get("subject") or "(no subject)", msg.get("receivedDateTime")))
+    got = cur.fetchone() is not None
+    conn.commit()
+    return got
+
+
+def _too_old(msg: dict) -> bool:
+    try:
+        received = datetime.fromisoformat((msg.get("receivedDateTime") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return (datetime.now(received.tzinfo) - received).total_seconds() > MAX_AGE_HOURS * 3600
+
+
+def process_message(token, msg: dict, context: str, voice: str, cur, conn) -> str:
+    """
+    Triage one inbox email and store the verdict. Returns
+    'drafted', 'skipped', 'seen' (already handled elsewhere) or 'error'.
+    """
+    mid = msg.get("id")
+    if not mid or not _claim(cur, conn, msg):
+        return "seen"
+
+    name, address = _sender(msg)
+    subject = msg.get("subject") or "(no subject)"
+    preview = msg.get("bodyPreview") or ""
+
+    noise = is_noise(msg) or ("older than 36 hours" if _too_old(msg) else "")
+    if noise:
+        cur.execute("""UPDATE email_drafts SET status = 'skipped', body_preview = %s, rationale = %s
+                       WHERE graph_message_id = %s""", (preview[:500], noise, mid))
+        conn.commit()
+        return "skipped"
+
+    try:
+        body = get_message_body(token, mid)
+        # Graph's bodyPreview stops around 255 chars, which is too little to
+        # judge a reply against. Keep a real excerpt of what they wrote.
+        preview = new_content(body)[:2000] or preview
+        thread = _thread_text(get_thread_context(token, msg.get("conversationId")), mid)
+        task = _register_task_for_thread(msg.get("conversationId"))
+        verdict = triage_and_draft(msg, body, thread, context, voice, register_task=task)
+    except Exception as e:
+        print(f"[email_replies] Failed on '{subject}': {e}")
+        # Release the claim so the next pass retries it.
+        cur.execute("DELETE FROM email_drafts WHERE graph_message_id = %s AND status = 'processing'", (mid,))
+        conn.commit()
+        return "error"
+
+    needs = bool(verdict.get("needs_reply"))
+    draft = (verdict.get("draft") or "").strip()
+    status = "pending" if (needs and draft) else "skipped"
+    cur.execute("""
+        UPDATE email_drafts
+           SET body_preview = %s, draft_body = %s, rationale = %s, urgency = %s,
+               status = %s, task_id = %s
+         WHERE graph_message_id = %s
+    """, (preview[:2000], draft or None, (verdict.get("reason") or "")[:400],
+          verdict.get("urgency") or "normal", status, task["id"] if task else None, mid))
+    conn.commit()
+    return "drafted" if status == "pending" else "skipped"
+
+
+def process_message_id(message_id: str) -> str:
+    """Real-time path: one email, by its Graph id, the moment it arrives."""
+    from outlook_mail import GRAPH, INBOX_FIELDS
+    import requests
+    ensure_schema()
+    token = get_access_token()
+    resp = requests.get(f"{GRAPH}/me/messages/{message_id}",
+                        headers={"Authorization": f"Bearer {token}"},
+                        params={"$select": INBOX_FIELDS + ",parentFolderId"}, timeout=30)
+    if resp.status_code == 404:
+        return "gone"
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Graph message fetch failed [{resp.status_code}]: {resp.text[:200]}")
+    msg = resp.json()
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        if _already_seen(cur, message_id):
+            return "seen"
+        return process_message(token, msg, _mcm_context(), _voice_samples(token), cur, conn)
+    finally:
+        cur.close()
+        conn.close()
+
+
 def run_reply_draft_pass(hours: int = 36, top: int = 25) -> dict:
-    """Scan the inbox and store draft replies awaiting approval."""
+    """Scan the inbox and store draft replies awaiting approval (backup to real time)."""
     ensure_schema()
     stats = {"scanned": 0, "skipped": 0, "drafted": 0, "errors": 0}
 
@@ -350,70 +509,26 @@ def run_reply_draft_pass(hours: int = 36, top: int = 25) -> dict:
         print("[email_replies] No recent inbox messages.")
         return stats
 
-    context = _mcm_context()
-    voice = _voice_samples(token)
-
     conn = get_connection()
     cur = conn.cursor()
-
-    for msg in messages:
-        stats["scanned"] += 1
-        mid = msg.get("id")
-        if not mid or _already_seen(cur, mid):
-            continue
-
-        name, address = _sender(msg)
-        received = msg.get("receivedDateTime")
-        subject = msg.get("subject") or "(no subject)"
-        preview = msg.get("bodyPreview") or ""
-
-        noise = is_noise(msg)
-        if noise:
-            stats["skipped"] += 1
-            cur.execute("""
-                INSERT INTO email_drafts (graph_message_id, conversation_id, from_name,
-                    from_email, subject, received_at, body_preview, rationale, status)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'skipped')
-                ON CONFLICT (graph_message_id) DO NOTHING
-            """, (mid, msg.get("conversationId"), name, address, subject,
-                  received, preview[:500], noise))
-            conn.commit()
-            continue
-
-        try:
-            body = get_message_body(token, mid)
-            # Graph's bodyPreview stops around 255 chars, which is too little to
-            # judge a reply against. Keep a real excerpt of what they wrote.
-            preview = new_content(body)[:2000] or preview
-            thread = _thread_text(get_thread_context(token, msg.get("conversationId")), mid)
-            verdict = triage_and_draft(msg, body, thread, context, voice)
-        except Exception as e:
-            stats["errors"] += 1
-            print(f"[email_replies] Failed on '{subject}': {e}")
-            continue
-
-        needs = bool(verdict.get("needs_reply"))
-        draft = (verdict.get("draft") or "").strip()
-        status = "pending" if (needs and draft) else "skipped"
-        if status == "pending":
-            stats["drafted"] += 1
-        else:
-            stats["skipped"] += 1
-
-        cur.execute("""
-            INSERT INTO email_drafts (graph_message_id, conversation_id, from_name,
-                from_email, subject, received_at, body_preview, draft_body,
-                rationale, urgency, status)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (graph_message_id) DO NOTHING
-        """, (mid, msg.get("conversationId"), name, address, subject, received,
-              preview[:2000], draft or None, (verdict.get("reason") or "")[:400],
-              verdict.get("urgency") or "normal", status))
-        conn.commit()
+    fresh = [m for m in messages if m.get("id") and not _already_seen(cur, m["id"])]
+    stats["scanned"] = len(messages)
+    if fresh:
+        context = _mcm_context()
+        voice = _voice_samples(token)
+        for msg in fresh:
+            result = process_message(token, msg, context, voice, cur, conn)
+            if result == "drafted":
+                stats["drafted"] += 1
+            elif result == "skipped":
+                stats["skipped"] += 1
+            elif result == "error":
+                stats["errors"] += 1
 
     cur.close()
     conn.close()
-    print(f"[email_replies] {stats}")
+    if fresh:
+        print(f"[email_replies] {stats}")
     return stats
 
 
