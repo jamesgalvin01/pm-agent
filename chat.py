@@ -6,8 +6,17 @@ Routes:
 - GET  /api/chat/conversations            -> list user's conversations (JSON)
 - GET  /api/chat/messages?conversation_id -> messages in a conversation (JSON)
 - POST /api/chat/conversations            -> create a new conversation
-- POST /api/chat/send                     -> user posts a message, Claude replies
+- POST /api/chat/send                     -> starts Rowan's reply in the background, returns at once
+- GET  /api/chat/status?conversation_id   -> is that reply still running / done / failed
+
+Why background (Oct 2026): a long turn (e.g. closing many tasks) used to hold
+the browser's request open until done. Railway's edge, or a phone pausing the
+page, could cut it ("upstream error") even though the work finished. Now the
+page starts the turn, then checks every couple of seconds.
 """
+import threading
+import time
+
 from app_shell import APP_HEAD, MOBILE_CSS, tab_bar
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
@@ -18,6 +27,11 @@ from auth import require_auth
 from rowan_agent import run_agent_turn
 
 router = APIRouter()
+
+# conversation_id -> {"state": "running" | "done" | "error", "error": str, "started": float}
+_jobs: dict = {}
+_jobs_lock = threading.Lock()
+JOB_MAX_SECONDS = 600
 
 
 # ============================================================
@@ -146,14 +160,40 @@ def send_message(
     text = (payload.get("text") or "").strip()
     if not conversation_id or not text:
         raise HTTPException(status_code=400, detail="conversation_id and text are required")
+    conv = int(conversation_id)
 
-    try:
-        reply = run_agent_turn(int(conversation_id), text)
-    except Exception as e:
-        print(f"[send] agent turn failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Agent error: {e}")
+    with _jobs_lock:
+        job = _jobs.get(conv)
+        if job and job["state"] == "running" and time.time() - job["started"] < JOB_MAX_SECONDS:
+            # Returned, not raised: the dashboard's HTTPException handler only passes redirects through.
+            return JSONResponse({"detail": "Rowan is still working on your last message. Give it a moment."},
+                                status_code=409)
+        _jobs[conv] = {"state": "running", "error": "", "started": time.time()}
 
-    return JSONResponse({"reply": reply})
+    def work():
+        try:
+            run_agent_turn(conv, text)
+            state, err = "done", ""
+        except Exception as e:
+            print(f"[send] agent turn failed: {e}", flush=True)
+            state, err = "error", f"Agent error: {e}"
+        with _jobs_lock:
+            _jobs[conv] = {"state": state, "error": err, "started": _jobs.get(conv, {}).get("started", time.time())}
+
+    threading.Thread(target=work, name=f"chat-turn-{conv}", daemon=True).start()
+    return JSONResponse({"status": "started"}, status_code=202)
+
+
+@router.get("/api/chat/status")
+def chat_status(conversation_id: int = Query(...), email: str = Depends(require_auth)):
+    with _jobs_lock:
+        job = dict(_jobs.get(conversation_id) or {})
+    if not job:
+        # Unknown: never started here, or Rowan restarted. The page reloads messages.
+        return JSONResponse({"state": "unknown"})
+    if job["state"] == "running" and time.time() - job["started"] > JOB_MAX_SECONDS:
+        return JSONResponse({"state": "error", "error": "Rowan took too long. Refresh to see what was done."})
+    return JSONResponse({"state": job["state"], "error": job.get("error", "")})
 
 
 # ============================================================
@@ -333,6 +373,26 @@ def chat_page(email: str = Depends(require_auth)):
                 }}).join('');
             }}
 
+            async function waitForReply(convId) {{
+                const started = Date.now();
+                let misses = 0;
+                while (Date.now() - started < 10 * 60 * 1000) {{
+                    await new Promise(r => setTimeout(r, 1500));
+                    let st;
+                    try {{
+                        const r = await fetch('/api/chat/status?conversation_id=' + convId);
+                        st = await r.json();
+                    }} catch (_) {{
+                        // network blip (phone asleep, page paused): keep waiting
+                        if (++misses > 40) throw new Error('lost connection - refresh to see the reply');
+                        continue;
+                    }}
+                    if (st.state === 'done' || st.state === 'unknown') return;
+                    if (st.state === 'error') throw new Error(st.error || 'Rowan hit an error');
+                }}
+                throw new Error('still working - refresh in a minute to see the reply');
+            }}
+
             async function loadMessages(convId) {{
                 const res = await fetch('/api/chat/messages?conversation_id=' + convId);
                 const list = await res.json();
@@ -392,18 +452,21 @@ def chat_page(email: str = Depends(require_auth)):
                 msgsEl.scrollTop = msgsEl.scrollHeight;
 
                 try {{
+                    const convId = activeConvId;
                     const res = await fetch('/api/chat/send', {{
                         method: 'POST',
                         headers: {{'Content-Type': 'application/json'}},
-                        body: JSON.stringify({{conversation_id: activeConvId, text: text}})
+                        body: JSON.stringify({{conversation_id: convId, text: text}})
                     }});
                     if (!res.ok) {{
-                        const err = await res.text();
+                        let err = await res.text();
+                        try {{ err = JSON.parse(err).detail || err; }} catch (_) {{}}
                         throw new Error(err || 'request failed');
                     }}
-                    // Reload from DB (authoritative)
+                    // Rowan works in the background; check back until the reply is saved.
+                    await waitForReply(convId);
                     document.getElementById('thinking')?.remove();
-                    await loadMessages(activeConvId);
+                    if (convId === activeConvId) await loadMessages(convId);
                     await loadConversations();
                 }} catch (e) {{
                     document.getElementById('thinking')?.remove();
