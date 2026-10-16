@@ -45,6 +45,41 @@ WORK_START_HOUR, WORK_END_HOUR = 7, 19
 QUEUE_LOCK_KEY = 74221               # Postgres advisory lock: one sender at a time
 
 
+# A draft James hasn't answered in this long stops blocking newer ones: it
+# goes back in the queue (it will be offered again) and the newest goes out.
+STALE_QUESTION_SECONDS = 30 * 60
+
+
+def _release_stale_question() -> None:
+    pending = get_pending()
+    if not pending or pending.get("type") != "email_reply":
+        return
+    age = pending_age_seconds()
+    if age is None or age < STALE_QUESTION_SECONDS:
+        return
+    if not _next_untexted_draft():
+        return                      # nothing newer waiting; leave it where it is
+    _update("UPDATE email_drafts SET texted_at = NULL WHERE id = %s AND status = 'pending'",
+            (pending.get("draft_id"),))
+    clear_pending()
+
+
+def focus_draft(draft_id) -> bool:
+    """
+    Make this draft the open question (James tapped a button on its message).
+    Buttons name their own draft, so tapping Send on an older message can never
+    act on a different draft. False if that draft was already handled.
+    """
+    row = _draft_row(draft_id)
+    if not row or row[5] != "pending":
+        return False
+    pending = get_pending()
+    if not (pending and pending.get("type") == "email_reply" and str(pending.get("draft_id")) == str(draft_id)):
+        set_pending({"type": "email_reply", "draft_id": int(draft_id)})
+        _update("UPDATE email_drafts SET texted_at = COALESCE(texted_at, NOW()) WHERE id = %s", (draft_id,))
+    return True
+
+
 def in_working_hours(now=None) -> bool:
     now = now or datetime.now(ET)
     return now.weekday() < 5 and WORK_START_HOUR <= now.hour < WORK_END_HOUR
@@ -77,6 +112,21 @@ def set_pending(action: dict) -> None:
     conn.commit()
     cur.close()
     conn.close()
+
+
+def pending_age_seconds():
+    """How long the open question has been waiting, or None."""
+    conn = get_connection()
+    cur = conn.cursor()
+    _ensure_pending_table(cur)
+    conn.commit()
+    cur.execute("SELECT action, created_at FROM sms_pending WHERE id = 1")
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not row or not row[0]:
+        return None
+    return (datetime.now(row[1].tzinfo) - row[1]).total_seconds()
 
 
 def get_pending():
@@ -127,7 +177,10 @@ def _draft_row(draft_id):
 
 
 def _next_untexted_draft():
-    """Highest urgency first, then oldest, so nothing starves."""
+    """
+    Urgent first, then NEWEST first: an email that just arrived is the one
+    James is most likely able to act on now. Older ones still come, after.
+    """
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
@@ -137,7 +190,7 @@ def _next_untexted_draft():
          WHERE status = 'pending'
            AND draft_body IS NOT NULL
            AND texted_at IS NULL
-         ORDER BY (urgency = 'high') DESC, received_at ASC
+         ORDER BY (urgency = 'high') DESC, received_at DESC
          LIMIT 1
     """)
     row = cur.fetchone()
@@ -250,6 +303,8 @@ def notify_next_email_draft(respect_hours: bool = False) -> bool:
         return False
     if respect_hours and not in_working_hours():
         return False
+    if respect_hours:
+        _release_stale_question()
     # The web service (real-time path) and the worker (backup pass) can both
     # get here at once; an advisory lock makes sure only one sends.
     lock_conn = get_connection()
@@ -468,3 +523,62 @@ def discard_all_drafts(before_today: bool = False) -> int:
         if not row or row[5] != "pending":
             clear_pending()
     return n
+
+
+# ============================================================
+# STATUS  (/status on Telegram)
+# ============================================================
+
+def status_report() -> str:
+    """Plain-text health check of the email pipeline, for /status."""
+    lines = ["Rowan status"]
+    # 1. Claude
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        client.messages.create(model="claude-sonnet-4-6", max_tokens=5,
+                               messages=[{"role": "user", "content": "ok"}])
+        lines.append("Claude API: working")
+    except Exception as e:
+        lines.append(f"Claude API: FAILING - {str(e)[:160]}")
+    # 2. Real time
+    try:
+        from outlook_mail import get_secret
+        sub_id, exp = get_secret("graph_inbox_sub_id"), get_secret("graph_inbox_sub_expires")
+        last = get_secret("graph_last_notification")
+        if sub_id:
+            lines.append(f"Real-time email: on (renews before {(exp or '?')[:16].replace('T', ' ')} UTC)")
+        else:
+            lines.append("Real-time email: NOT subscribed yet (15-min backup still runs)")
+        lines.append("Last new-mail notice from Microsoft: " + (f"{last[:16].replace('T', ' ')} UTC" if last else "none yet"))
+        lp = get_secret("email_last_pass")
+        lines.append("Last backup check: " + (f"{lp[:16].replace('T', ' ')} UTC" if lp else "none yet"))
+    except Exception as e:
+        lines.append(f"Real-time email: unknown ({str(e)[:120]})")
+    # 3. Queue
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""SELECT status, COUNT(*) FROM email_drafts
+                        WHERE created_at > NOW() - INTERVAL '24 hours' GROUP BY status""")
+        counts = dict(cur.fetchall())
+        cur.execute("SELECT COUNT(*) FROM email_drafts WHERE status = 'pending'")
+        waiting = cur.fetchone()[0]
+        cur.close()
+        conn.close()
+        lines.append(f"Drafts waiting for you: {waiting}")
+        lines.append("Last 24h: " + (", ".join(f"{v} {k}" for k, v in sorted(counts.items())) or "nothing"))
+        pending = get_pending()
+        if pending and pending.get("type") == "email_reply":
+            row = _draft_row(pending.get("draft_id"))
+            age = int((pending_age_seconds() or 0) // 60)
+            who = (row[2] or row[3]) if row else "?"
+            lines.append(f"Open question: reply to {who} ({row[4] if row else ''}), waiting {age} min. "
+                         "/pending shows it.")
+        else:
+            lines.append("Open question: none")
+    except Exception as e:
+        lines.append(f"Queue: unknown ({str(e)[:120]})")
+    lines.append(f"Working hours now (7am-7pm weekdays): {'yes' if in_working_hours() else 'no'}")
+    lines.append(f"Channel: {APPROVAL_CHANNEL}")
+    return "\n".join(lines)

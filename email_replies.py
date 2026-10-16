@@ -529,6 +529,11 @@ def run_reply_draft_pass(hours: int = 36, top: int = 25) -> dict:
     conn.close()
     if fresh:
         print(f"[email_replies] {stats}")
+    try:
+        from outlook_mail import set_secret
+        set_secret("email_last_pass", datetime.utcnow().isoformat() + "+00:00")
+    except Exception:
+        pass
     return stats
 
 

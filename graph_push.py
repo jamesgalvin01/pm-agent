@@ -188,6 +188,14 @@ def handle_new_message(message_id: str) -> None:
         print(f"[graph_push] processing {message_id[:20]}... failed: {e}", flush=True)
 
 
+def _mark_notified() -> None:
+    try:
+        from outlook_mail import set_secret
+        set_secret("graph_last_notification", datetime.now(timezone.utc).isoformat())
+    except Exception:
+        pass
+
+
 @router.post("/graph/notify")
 async def graph_notify(request: Request, background: BackgroundTasks):
     # 1. Validation handshake when the subscription is created or renewed.
@@ -213,5 +221,6 @@ async def graph_notify(request: Request, background: BackgroundTasks):
         # 3. A new email.
         mid = (note.get("resourceData") or {}).get("id")
         if mid:
+            background.add_task(_mark_notified)
             background.add_task(handle_new_message, mid)
     return Response(status_code=202, background=background)

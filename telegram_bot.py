@@ -77,6 +77,7 @@ HELP_TEXT = (
     "/scan - check my inbox now and draft anything that needs a reply\n"
     "/pending - show the email draft waiting for approval\n"
     "/clear - discard waiting email drafts in bulk (asks first; nothing is sent)\n"
+    "/status - is email working? Claude, real-time, queue and what's holding it up\n"
     "/new - start a fresh conversation (clears my short-term context)"
 )
 
@@ -488,6 +489,18 @@ def apply_draft_answer(text: str) -> None:
         send_message(f"Couldn't apply that to the draft: {str(e)[:200]}")
 
 
+def answer_draft_button(draft_ref, word: str) -> None:
+    """A button on a draft message: act on THAT draft, whichever is currently open."""
+    from approvals import focus_draft
+    try:
+        if draft_ref and not focus_draft(int(draft_ref)):
+            send_message("That draft was already handled. Nothing was sent.")
+            return
+    except ValueError:
+        pass
+    apply_draft_answer(word)
+
+
 # A scan is slow (Graph, then a Claude call per message), so it runs in the
 # background and this lock stops a second one starting.
 _scan_lock = threading.Lock()
@@ -680,12 +693,16 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
             background.add_task(_clear)
         elif action in ("send", "sendtask", "no", "later"):
             word = {"send": "SEND", "sendtask": "SEND+TASK", "no": "NO", "later": "LATER"}[action]
-            background.add_task(apply_draft_answer, word)
+            background.add_task(answer_draft_button, ref, word)
         elif action == "edit":
             try:
                 draft_id = int(ref)
             except ValueError:
                 draft_id = ref
+            from approvals import focus_draft
+            if not focus_draft(draft_id):
+                send_message("That draft was already handled.")
+                return done
             state_set("li_edit", {})
             state_set("edit_mode", {"draft_id": draft_id, "until": time.time() + EDIT_WINDOW_SECONDS})
             send_message(
@@ -840,6 +857,13 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
         # claiming there's nothing - the queue only ever holds one open.
         if not (resend_pending_draft() or notify_next_email_draft()):
             send_message("Nothing waiting on you.")
+        return done
+
+    if cmd == "status" and text.startswith("/"):
+        def _status():
+            from approvals import status_report
+            send_message(status_report())
+        background.add_task(_status)
         return done
 
     if cmd == "clear" and text.startswith("/"):
