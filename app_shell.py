@@ -31,8 +31,8 @@ APP_HEAD = f"""
         <meta name='apple-mobile-web-app-title' content='Rowan'>
         <meta name='apple-mobile-web-app-status-bar-style' content='black-translucent'>
         <link rel='manifest' href='/manifest.webmanifest'>
-        <link rel='apple-touch-icon' href='/static/apple-touch-icon.png'>
-        <link rel='icon' type='image/png' sizes='32x32' href='/static/favicon-32.png'>"""
+        <link rel='apple-touch-icon' href='/static/apple-touch-icon.png?v=2'>
+        <link rel='icon' type='image/png' sizes='32x32' href='/static/favicon-32.png?v=2'>"""
 
 
 TABS = (
@@ -151,9 +151,9 @@ def manifest():
             "background_color": THEME,
             "theme_color": THEME,
             "icons": [
-                {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
-                {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"},
-                {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+                {"src": "/static/icon-192.png?v=2", "sizes": "192x192", "type": "image/png"},
+                {"src": "/static/icon-512.png?v=2", "sizes": "512x512", "type": "image/png"},
+                {"src": "/static/icon-512.png?v=2", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
             ],
         },
         media_type="application/manifest+json",
