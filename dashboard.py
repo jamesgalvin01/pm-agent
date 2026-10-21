@@ -409,6 +409,39 @@ def complete_task(task_id: int, request: Request, email: str = Depends(require_a
     return RedirectResponse(url=back, status_code=303)
 
 
+@app.post("/tasks/add")
+def add_task_from_dashboard(
+    request: Request,
+    description: str = Form(...),
+    project_id: int = Form(0),
+    due_date: str = Form(""),
+    waiting_on: str = Form(""),
+    priority: str = Form("medium"),
+    blocking: str = Form(""),
+    back: str = Form("/"),
+    email: str = Depends(require_auth),
+):
+    """Add a task straight from the Dashboard tab. Blank due date = the 7-day default;
+    filling in 'Waiting on' files it as something someone else owes you."""
+    import register as reg
+    desc = description.strip()
+    if not back.startswith("/") or back.startswith("//"):
+        back = "/"
+    if not desc:
+        return RedirectResponse(url=back, status_code=303)
+    result = reg.add_task(
+        desc,
+        project_id=project_id or None,
+        due_date=due_date or None,
+        waiting_on=waiting_on.strip() or None,
+        blocking=bool(blocking),
+        priority=priority,
+        source="dashboard",
+    )
+    sep = "&" if "?" in back else "?"
+    return RedirectResponse(url=f"{back}{sep}added={result['id']}", status_code=303)
+
+
 @app.post("/snooze/{task_id}")
 def snooze_task(task_id: int, request: Request, email: str = Depends(require_auth)):
     """Push a task's due date 3 days (from today, if it's already late)."""
@@ -887,7 +920,8 @@ def emails_page(ok: int = 0, err: str = "", email: str = Depends(require_auth)):
 
 
 @app.get("/", response_class=HTMLResponse)
-def home(filter: str = "open", project: int = 0, ball: str = "", email: str = Depends(require_auth)):
+def home(filter: str = "open", project: int = 0, ball: str = "", added: int = 0,
+         email: str = Depends(require_auth)):
     """
     The action-item register. Open view = ranked (overdue, due in 48h, blocking,
     stale waiting-on, rest). ?project=<id> narrows it to one project's register;
@@ -1029,10 +1063,62 @@ def home(filter: str = "open", project: int = 0, ball: str = "", email: str = De
                + chip("Waiting on others", link(ball="waiting"), ball == "waiting")
                + (chip("All projects", link(project=0), False) if project else ""))
 
+    # Quick-add form. Defaults to the project whose register you're looking at.
+    active_projects = reg.list_projects(active_only=True)
+    if project and not any(p["id"] == project for p in active_projects):
+        active_projects += [{"id": p[0], "name": p[1]} for p in projects if p[0] == project]
+    project_opts = "<option value='0'>No project</option>" + "".join(
+        f"<option value='{p['id']}'{' selected' if p['id'] == project else ''}>{esc(p['name'] or '')}</option>"
+        for p in active_projects)
+    added_note = (f"<div class='added-note'><i class='ti ti-check'></i> Task #{added} added</div>"
+                  if added else "")
+    add_task_html = f"""
+            <details class='add-task'>
+                <summary><i class='ti ti-plus'></i> Add a task</summary>
+                <form method='post' action='/tasks/add' class='add-form'>
+                    <input type='hidden' name='back' value='{esc(link())}'>
+                    <div class='f-wide'><label>Task</label>
+                        <input type='text' name='description' required autocomplete='off'
+                               placeholder='e.g. Send GC the revised bid schedule'></div>
+                    <div><label>Project</label><select name='project_id'>{project_opts}</select></div>
+                    <div><label>Due</label><input type='date' name='due_date'
+                         title='Leave blank for {reg.DEFAULT_DUE_DAYS} days out'></div>
+                    <div><label>Priority</label><select name='priority'>
+                        <option value='high'>High</option>
+                        <option value='medium' selected>Medium</option>
+                        <option value='low'>Low</option></select></div>
+                    <div><label>Waiting on <span class='opt'>(optional)</span></label>
+                        <input type='text' name='waiting_on' placeholder='Blank = yours'></div>
+                    <div class='f-check'><label><input type='checkbox' name='blocking' value='1'> Blocking</label></div>
+                    <button type='submit'><i class='ti ti-plus'></i> Add task</button>
+                </form>
+                <div class='add-hint'>Blank due date = {reg.DEFAULT_DUE_DAYS} days out.</div>
+            </details>"""
+
     return f"""
     <html>
     {page_head("Rowan Dashboard")}
     <body>
+    <style>
+        .add-task {{ margin: 0 0 18px; }}
+        .add-task summary {{
+            list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+            background: #5b7cfa; color: #fff; padding: 10px 18px; border-radius: 10px;
+            font-size: 14px; font-weight: 500; user-select: none;
+        }}
+        .add-task summary::-webkit-details-marker {{ display: none; }}
+        .add-task[open] summary {{ background: #1c1f2a; color: #d4d7e0; margin-bottom: 12px; }}
+        .add-task .add-form {{ margin-bottom: 6px; }}
+        .add-task .f-wide {{ flex: 1 1 320px; }}
+        .add-task .f-wide input {{ width: 100%; box-sizing: border-box; }}
+        .add-task .f-check label {{ display: flex; align-items: center; gap: 7px; text-transform: none;
+            letter-spacing: 0; font-size: 14px; color: #d4d7e0; padding: 9px 0; margin: 0; }}
+        .add-task .f-check input {{ width: auto !important; }}
+        .add-task .opt {{ text-transform: none; letter-spacing: 0; }}
+        .add-hint {{ font-size: 12px; color: #565a6b; }}
+        .added-note {{ background: rgba(43,212,160,0.12); color: #2bd4a0; border-radius: 10px;
+            padding: 10px 14px; margin: 0 0 14px; font-size: 14px; }}
+    </style>
         {header_html(email, "dashboard")}
         <div class='container'>
             <div class='section-title'>Projects <span style='color:#565a6b;font-weight:400;text-transform:none;letter-spacing:0;'>· tap one for its register</span></div>
@@ -1048,6 +1134,8 @@ def home(filter: str = "open", project: int = 0, ball: str = "", email: str = De
                 </div>
             </div>
             <div class='section-title'>{esc(title)} ({len(tasks)})</div>
+            {added_note}
+            {add_task_html}
             <div class='filters'>{filters}</div>
             <div class='tcards m-only'>{cards_html}</div>
             <table class='d-only'>
