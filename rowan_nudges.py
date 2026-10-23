@@ -214,7 +214,7 @@ def _detect_conversations_awaiting_reply(cur) -> list[dict]:
         SELECT c.id, c.title, lm.content, lm.created_at
           FROM conversations c
           JOIN last_msg lm ON c.id = lm.conversation_id
-         WHERE c.status != 'archived'
+         WHERE c.status NOT IN ('archived', 'field')
            AND lm.role = 'assistant'
            AND lm.created_at < NOW() - INTERVAL '24 hours'
            AND TRIM(lm.content) LIKE '%?'

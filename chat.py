@@ -42,7 +42,8 @@ def _ensure_default_conversation() -> int:
     """Ensure at least one conversation exists. Returns its id."""
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id FROM conversations ORDER BY last_message_at DESC NULLS LAST, id DESC LIMIT 1")
+    cur.execute("SELECT id FROM conversations WHERE COALESCE(status, '') NOT IN ('field', 'archived') "
+                "ORDER BY last_message_at DESC NULLS LAST, id DESC LIMIT 1")
     row = cur.fetchone()
     if row:
         conv_id = row[0]
@@ -82,7 +83,7 @@ def list_conversations(email: str = Depends(require_auth)):
         """
         SELECT id, title, status, last_message_at, created_at
           FROM conversations
-         WHERE status != 'archived'
+         WHERE status NOT IN ('archived', 'field')   -- field PMs' chats live on /field
          ORDER BY last_message_at DESC NULLS LAST, id DESC
          LIMIT 100
         """

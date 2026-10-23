@@ -46,6 +46,7 @@ TABS = (
     ("leads", "/leads", "ti-target-arrow", "Leads"),
     ("emails", "/emails", "ti-mail", "Email"),
     ("chat", "/chat", "ti-message-circle", "Chat"),
+    ("field", "/field", "ti-crane", "Field"),
 )
 
 

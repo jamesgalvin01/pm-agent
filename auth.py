@@ -192,10 +192,21 @@ def session_needs_refresh(token: str) -> bool:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
     except jwt.PyJWTError:
         return False
-    if (payload.get("sub") or "") != ALLOWED_EMAIL:
-        return False
     issued = datetime.fromtimestamp(int(payload.get("iat", 0)), tz=timezone.utc)
-    return datetime.now(timezone.utc) - issued > SESSION_REFRESH_AFTER
+    if datetime.now(timezone.utc) - issued <= SESSION_REFRESH_AFTER:
+        return False
+    return can_sign_in(payload.get("sub") or "")
+
+
+def can_sign_in(email: str) -> bool:
+    """James, or an active field user (a PM assigned to a project)."""
+    email = (email or "").lower().strip()
+    if not email:
+        return False
+    if email == ALLOWED_EMAIL:
+        return True
+    from field_users import is_field_user
+    return is_field_user(email)
 
 
 # ---------- FastAPI dependency ----------
@@ -213,8 +224,34 @@ def require_auth(request: Request) -> str:
         )
     email = decode_session_jwt(cookie)
     if not email or email != ALLOWED_EMAIL:
+        # A signed-in field PM goes to their project page, never James's pages.
+        target = "/field" if email and can_sign_in(email) else "/login"
         raise HTTPException(
             status_code=status.HTTP_307_TEMPORARY_REDIRECT,
-            headers={"Location": "/login"},
+            headers={"Location": target},
         )
     return email
+
+
+def require_field_access(request: Request) -> dict:
+    """
+    FastAPI dependency for the /field pages. Lets in James (every project) and
+    active field users (only their assigned projects). Returns
+      {"email", "name", "admin": bool, "project_ids": list | None (None = all)}
+    Checked against the database on every request, so switching a field user
+    off locks them out straight away.
+    """
+    cookie = request.cookies.get(SESSION_COOKIE_NAME)
+    email = decode_session_jwt(cookie) if cookie else None
+    if email and email == ALLOWED_EMAIL:
+        return {"email": email, "name": "James", "admin": True, "project_ids": None}
+    if email:
+        from field_users import get_field_user
+        user = get_field_user(email)
+        if user:
+            return {"email": user["email"], "name": user["name"], "admin": False,
+                    "project_ids": user["project_ids"]}
+    raise HTTPException(
+        status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+        headers={"Location": "/login"},
+    )

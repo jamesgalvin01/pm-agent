@@ -13,6 +13,8 @@ from auth import (
     consume_magic_link_token,
     create_session_jwt,
     require_auth,
+    can_sign_in,
+    decode_session_jwt,
     SESSION_COOKIE_NAME,
     SESSION_DURATION,
     ALLOWED_EMAIL,
@@ -25,6 +27,7 @@ from sms_webhook import router as sms_router
 from telegram_bot import router as telegram_router
 from app_shell import router as app_shell_router, APP_HEAD, MOBILE_CSS, tab_bar
 from graph_push import router as graph_push_router, start_keeper as start_graph_keeper
+from field import router as field_router
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 
@@ -36,6 +39,7 @@ app.include_router(sms_router)
 app.include_router(telegram_router)
 app.include_router(app_shell_router)     # manifest + icons for the phone app
 app.include_router(graph_push_router)    # /graph/notify: real-time new-email notifications
+app.include_router(field_router)         # /field: project pages for field PMs
 
 
 @app.on_event("startup")
@@ -53,7 +57,9 @@ async def renew_session(request: Request, call_next):
     response = await call_next(request)
     cookie = request.cookies.get(SESSION_COOKIE_NAME)
     if cookie and response.status_code < 400 and session_needs_refresh(cookie):
-        _set_session_cookie(response, ALLOWED_EMAIL)
+        who = decode_session_jwt(cookie)
+        if who:
+            _set_session_cookie(response, who)
     return response
 
 
@@ -248,6 +254,7 @@ def header_html(email: str, active: str) -> str:
                 <a href='/leads' class='{cls("leads")}'>Leads</a>
                 <a href='/emails' class='{cls("emails")}'>Email</a>
                 <a href='/chat' class='{cls("chat")}'>Chat</a>
+                <a href='/field' class='{cls("field")}'>Field</a>
             </nav>
             <div class='user'>
                 <span>{email}</span>
@@ -346,11 +353,19 @@ def login_get(sent: int = 0, err: int = 0):
     </html>"""
 
 
+LOGIN_EMAIL_COOKIE = "rowan_login_email"
+
+
+def _home_for(email: str) -> str:
+    """James lands on his dashboard; a field PM lands on their project page."""
+    return "/" if email == ALLOWED_EMAIL else "/field"
+
+
 @app.post("/login")
 def login_post(email: str = Form(...)):
     email_norm = email.lower().strip()
 
-    if email_norm == ALLOWED_EMAIL:
+    if can_sign_in(email_norm):
         token, code = create_login(email_norm)
         link = f"{PUBLIC_BASE_URL}/auth/verify?token={token}"
         try:
@@ -358,24 +373,30 @@ def login_post(email: str = Form(...)):
         except Exception as e:
             print(f"[login] failed to send sign-in email to {email_norm}: {e}")
 
-    # Same answer either way, so the page never reveals which email is allowed.
-    return RedirectResponse(url="/login?sent=1", status_code=303)
+    # Same answer either way, so the page never reveals which emails are allowed.
+    # The code page needs to know whose code it is checking.
+    response = RedirectResponse(url="/login?sent=1", status_code=303)
+    response.set_cookie(LOGIN_EMAIL_COOKIE, email_norm, max_age=900, httponly=True,
+                        secure=True, samesite="lax")
+    return response
 
 
 @app.post("/login/code")
-def login_code(code: str = Form(...)):
-    email = verify_login_code(ALLOWED_EMAIL, code)
+def login_code(request: Request, code: str = Form(...)):
+    who = (request.cookies.get(LOGIN_EMAIL_COOKIE) or ALLOWED_EMAIL).lower().strip()
+    email = verify_login_code(who, code) if can_sign_in(who) else None
     if not email:
         return RedirectResponse(url="/login?sent=1&err=1", status_code=303)
-    response = RedirectResponse(url="/", status_code=303)
+    response = RedirectResponse(url=_home_for(email), status_code=303)
     _set_session_cookie(response, email)
+    response.delete_cookie(LOGIN_EMAIL_COOKIE)
     return response
 
 
 @app.get("/auth/verify")
 def auth_verify(token: str):
     email = consume_magic_link_token(token)
-    if not email or email != ALLOWED_EMAIL:
+    if not email or not can_sign_in(email):
         return HTMLResponse(
             "<html><body style='font-family:Inter,Arial,sans-serif;padding:40px;background:#0a0b0f;color:#d4d7e0;'>"
             "<h2>Link invalid or expired</h2>"
@@ -385,7 +406,7 @@ def auth_verify(token: str):
             status_code=400,
         )
 
-    response = RedirectResponse(url="/", status_code=303)
+    response = RedirectResponse(url=_home_for(email), status_code=303)
     _set_session_cookie(response, email)
     return response
 
