@@ -351,6 +351,7 @@ def start_edit(field: str) -> None:
     state_set("edit_mode", {})
     state_set("li_edit", {})
     state_set("invoice_edit", {})
+    state_set("onboard_edit", {})
     _set_edit_mode(field)
     if field == "scope":
         send_message("Send the new Attachment A (start with ## to replace it all), or tell me what to change: "
@@ -451,6 +452,36 @@ def record_lead(spec, summary, filename) -> str:
     return result
 
 
+def _save_built(spec, summary, item, folder) -> int:
+    """Keep every built proposal so /won can set the project up from it."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS proposals (
+            id SERIAL PRIMARY KEY,
+            project_name TEXT,
+            folder TEXT,
+            filename TEXT,
+            path TEXT,
+            web_url TEXT,
+            total_fee NUMERIC,
+            total_months NUMERIC,
+            spec JSONB,
+            status TEXT DEFAULT 'sent',          -- sent | signed
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    cur.execute("""INSERT INTO proposals (project_name, folder, filename, path, web_url, total_fee,
+                   total_months, spec) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (spec["project_name"], folder, item["name"], item["path"], item.get("web_url"),
+                 summary["total_fee"], summary["total_months"], json.dumps(spec)))
+    pid = cur.fetchone()[0]
+    conn.commit()
+    cur.close()
+    conn.close()
+    return pid
+
+
 def build() -> None:
     from telegram_bot import send_message, _link_button, _typing
     draft = _state()
@@ -492,10 +523,19 @@ def build() -> None:
     except Exception as e:
         print(f"[proposals] lead failed: {e}")
         lead_line = f"Couldn't record the lead ({str(e)[:120]}); add it with /lead."
+    try:
+        proposal_id = _save_built(spec, summary, item, draft["folder"])
+    except Exception as e:
+        print(f"[proposals] couldn't record proposal: {e}")
+        proposal_id = None
+    buttons = [[{"text": "Open in OneDrive", "url": item["web_url"]}]] if item.get("web_url") else []
+    if proposal_id:
+        buttons.append([{"text": "Mark signed → set up project", "callback_data": f"onbstart:{proposal_id}"}])
     _send_document(content, item["name"],
                    f"{item['name']}\n{_money(summary['total_fee'])} over {summary['total_months']:g} months. "
-                   f"Saved to {item['path']}.\n{lead_line}",
-                   reply_markup=_link_button(item.get("web_url")))
+                   f"Saved to {item['path']}.\n{lead_line}\n\nWhen the client signs, tap Mark signed "
+                   f"(or send /won {spec['project_name']}).",
+                   reply_markup={"inline_keyboard": buttons} if buttons else None)
     draft["built"] = {"name": item["name"], "path": item["path"], "at": time.time()}
     _save(draft)
     send_message("Want changes? Tap Edit scope or Edit details on the draft above and Build again; "

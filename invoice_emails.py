@@ -335,6 +335,7 @@ def start_edit(number) -> None:
     state_set("edit_mode", {})
     state_set("li_edit", {})
     state_set("proposal_edit", {})
+    state_set("onboard_edit", {})
     state_set("invoice_edit", {"invoice_number": int(number), "until": time.time() + EDIT_WINDOW_SECONDS})
     send_message(f"What should change on INV-{number}'s email? e.g. \"send to ap@client.com, cc Marc\", "
                  "\"mention the October credit\", \"shorter\", or paste the exact body.")

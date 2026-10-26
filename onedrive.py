@@ -136,3 +136,33 @@ def upload_file(content: bytes, folder: str, filename: str,
         "path": f"{parent.split('root:', 1)[-1]}/{item.get('name', filename)}".lstrip("/"),
         "id": item.get("id", ""),
     }
+
+
+def ensure_folder(path: str) -> bool:
+    """
+    Make sure an absolute OneDrive folder path exists (e.g. 'MCM/Projects/X/01 Legal').
+    Creates missing segments; never touches existing ones. True if anything was created.
+    """
+    token = get_access_token(scopes=FILES_SCOPES)
+    auth = {"Authorization": f"Bearer {token}"}
+    parts = [p for p in path.split("/") if p]
+    created = False
+    for i, part in enumerate(parts):
+        here = "/".join(parts[:i + 1])
+        r = requests.get(f"{GRAPH}/me/drive/root:/{_quote_path(here)}", headers=auth, timeout=30)
+        if r.status_code == 200:
+            continue
+        if r.status_code != 404:
+            raise RuntimeError(f"OneDrive check failed [{r.status_code}] for {here}: {r.text[:200]}")
+        parent = "/".join(parts[:i])
+        url = (f"{GRAPH}/me/drive/root:/{_quote_path(parent)}:/children" if parent
+               else f"{GRAPH}/me/drive/root/children")
+        c = requests.post(url, headers={**auth, "Content-Type": "application/json"},
+                          json={"name": part, "folder": {}, "@microsoft.graph.conflictBehavior": "fail"},
+                          timeout=30)
+        if c.status_code == 409:          # created meanwhile
+            continue
+        if c.status_code >= 400:
+            raise RuntimeError(f"OneDrive create failed [{c.status_code}] for {here}: {c.text[:200]}")
+        created = True
+    return created
