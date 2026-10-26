@@ -275,7 +275,8 @@ def _send_draft(row) -> None:
         "--- THEIR EMAIL ---\n"
         f"{shorten(incoming, MAX_INCOMING_CHARS) or '(no text captured)'}\n\n"
         "--- ROWAN'S REPLY ---\n"
-        f"{shorten(draft_body)}",
+        f"{shorten(draft_body)}\n"
+        "(+ your standard signature and logo)",
         draft_id=draft_id,
     )
 

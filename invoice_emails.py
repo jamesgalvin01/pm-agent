@@ -33,7 +33,7 @@ EDIT_WINDOW_SECONDS = 900
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August",
           "September", "October", "November", "December"]
 
-SIGNATURE = "James Galvin\nMiami Coastline Management, LLC\n305.407.4898 | Miami-Coastline.com"
+# James's standard signature and logo are added on send (outlook_mail.signed_html).
 
 # ============================================================
 # STORAGE
@@ -137,7 +137,7 @@ def draft_email(inv, period_label):
         f"{period_label} owner's representative services on {project}, in the amount of "
         f"{_money(float(inv['amount']))}. Payment is due by {_due_text(inv.get('due_date'))}.\n\n"
         "Wire instructions are on the invoice. Please let me know if you have any questions.\n\n"
-        f"Thank you,\n{SIGNATURE}"
+        "Thank you,"
     )
     return subject, body
 
@@ -191,7 +191,8 @@ def _card(r):
              f"To: {to}"]
     if r["cc_emails"]:
         lines.append("Cc: " + ", ".join(r["cc_emails"]))
-    lines += [f"Subject: {r['subject']}", f"Attached: {r['filename']}", "", r["body"]]
+    from outlook_mail import signed_text
+    lines += [f"Subject: {r['subject']}", f"Attached: {r['filename']}", "", signed_text(r["body"])]
     if not r["to_emails"]:
         lines += ["", "No billing email for this client. Add \"to\" in clients.json on the Mac, or tap "
                       "Edit and tell me who it goes to."]
@@ -345,7 +346,8 @@ a client. Apply his change and return ONLY a JSON object:
 Keep everything he didn't ask to change exactly as it is. Never change the invoice number, amount
 or due date unless he says so. Only use email addresses he typed or that were already there; never
 guess an address from a name (if he names someone without an address, leave the recipients as they
-are). Plain text body; keep the signature."""
+are). Plain text body ending with a closing word such as "Thank you," and no name or signature
+(James's signature and logo are added automatically when it's sent)."""
 
 
 def apply_edit(text: str) -> None:

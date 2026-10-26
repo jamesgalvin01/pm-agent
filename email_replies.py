@@ -256,7 +256,7 @@ the email, the thread, or the project context. If a fact is needed and you don't
 leave a bracketed placeholder like [confirm date] so James can see the gap at a glance.
 - Do not commit to money or contract terms. Point those to a call or say he'll follow up.
 - No subject line, no "Hi" if the thread is already mid-conversation, no signature block — \
-just the body. A simple sign-off line ("Thanks, James" / "Best, James") is fine.
+just the body. End with a closing word only ("Thanks," / "Best Regards,"), no name: James's standard signature and logo are added automatically when it's sent.
 - 2-6 sentences unless the email genuinely needs more.
 
 Return ONLY a JSON object, no prose, no code fence:
@@ -360,7 +360,7 @@ Rules:
 - Write as James. Keep the voice of the current draft unless he asks you to change it.
 - Never invent facts - no dates, figures, commitments or names that aren't in the email, \
 the current draft, or his message. Use [brackets] for anything he'd need to fill in.
-- No subject line, no signature block. A short sign-off is fine.
+- No subject line, no name or signature block. End with a closing word only ("Thanks," / "Best Regards,"); the signature and logo are added on send.
 - Return ONLY the reply body. No preamble, no quotes around it, no explanation."""
 
 

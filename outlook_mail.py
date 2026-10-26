@@ -234,6 +234,87 @@ def text_to_html(text: str) -> str:
     return '<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;">' + "".join(parts) + "</div>"
 
 
+# ============================================================
+# SIGNATURE — added to every email Rowan sends, to match James's Outlook
+# ============================================================
+
+SIGNATURE_NAME = "James Galvin"
+SIGNATURE_LINES = ["305-407-4898", "James@Miami-Coastline.com", "www.miami-coastline.com"]
+DEFAULT_CLOSING = "Best Regards,"
+LOGO_CID = "mcm-signature-logo"
+LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "email-logo.png")
+LOGO_WIDTH_PX = 150
+
+_CLOSING_RE = re.compile(
+    r"^(best( regards)?|kind regards|warm regards|regards|thanks( again)?|thank you( again)?|"
+    r"many thanks|cheers|sincerely|respectfully)\s*[,.!]?\s*(james( galvin)?)?\s*[,.]?$",
+    re.IGNORECASE)
+_NAME_RE = re.compile(r"^[-–—\s]*(james( galvin)?|jg)\s*[,.]?$", re.IGNORECASE)
+_SIG_LINE_RE = re.compile(r"(miami coastline management|305[-. ]?407[-. ]?4898|@miami-coastline\.com|"
+                          r"miami-coastline\.com)", re.IGNORECASE)
+
+
+def split_closing(body_text: str):
+    """
+    Strip whatever sign-off a draft ends with (closing word, name, any old
+    signature lines). Returns (body, closing) where closing is the draft's own
+    closing word ("Thanks,") or the default "Best Regards,".
+    """
+    lines = (body_text or "").rstrip().split("\n")
+    closing = None
+    while lines:
+        last = lines[-1].strip()
+        if not last:
+            lines.pop()
+            continue
+        if _NAME_RE.match(last) or (_SIG_LINE_RE.search(last) and len(last) < 80):
+            lines.pop()
+            continue
+        if _CLOSING_RE.match(last):
+            word = re.sub(r"\s*[,.!]?\s*(james( galvin)?)?\s*[,.]?$", "", last, flags=re.IGNORECASE)
+            closing = word[:1].upper() + word[1:] + ","
+            lines.pop()
+        break
+    return "\n".join(lines).rstrip(), closing or DEFAULT_CLOSING
+
+
+def signature_html(closing: str = DEFAULT_CLOSING, with_logo: bool = True) -> str:
+    p = '<p style="margin:0;">'
+    esc = html.escape
+    parts = [f'{p}{esc(closing)}</p>', f'{p}&nbsp;</p>', f'{p}{esc(SIGNATURE_NAME)}</p>',
+             f'{p}{esc(SIGNATURE_LINES[0])}</p>',
+             f'{p}<a href="mailto:{esc(SIGNATURE_LINES[1])}">{esc(SIGNATURE_LINES[1])}</a></p>',
+             f'{p}<a href="http://{esc(SIGNATURE_LINES[2])}">{esc(SIGNATURE_LINES[2])}</a></p>']
+    if with_logo and os.path.exists(LOGO_PATH):
+        parts.append(f'{p}<img src="cid:{LOGO_CID}" alt="Miami Coastline Management" '
+                     f'width="{LOGO_WIDTH_PX}" style="width:{LOGO_WIDTH_PX}px;height:auto;margin-top:8px;"></p>')
+    return '<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;">' + "".join(parts) + "</div>"
+
+
+def signed_html(body_text: str) -> str:
+    """Approved plain-text body -> HTML with James's standard signature and logo."""
+    body, closing = split_closing(body_text)
+    spacer = '<p style="margin:0 0 12px 0;">&nbsp;</p>' if body else ""
+    return text_to_html(body) + spacer + signature_html(closing)
+
+
+def signed_text(body_text: str) -> str:
+    """What the signed email reads like, for previews in Telegram or the dashboard."""
+    body, closing = split_closing(body_text)
+    return f"{body}\n\n{closing}\n\n{SIGNATURE_NAME}\n" + "\n".join(SIGNATURE_LINES) + "\n[MCM logo]"
+
+
+def _logo_attachment():
+    if not os.path.exists(LOGO_PATH):
+        return None
+    import base64
+    with open(LOGO_PATH, "rb") as f:
+        data = f.read()
+    return {"@odata.type": "#microsoft.graph.fileAttachment", "name": "mcm-logo.png",
+            "contentType": "image/png", "contentBytes": base64.b64encode(data).decode("ascii"),
+            "isInline": True, "contentId": LOGO_CID}
+
+
 def _merge_into_draft_body(draft_html: str, our_html: str) -> str:
     """Put our reply above the quoted history Graph generated."""
     if not draft_html:
@@ -267,7 +348,7 @@ def send_reply(message_id: str, body_text: str, reply_all: bool = False) -> str:
     draft_id = draft["id"]
 
     merged = _merge_into_draft_body(
-        draft.get("body", {}).get("content", ""), text_to_html(body_text)
+        draft.get("body", {}).get("content", ""), signed_html(body_text)
     )
 
     resp = requests.patch(
@@ -277,6 +358,16 @@ def send_reply(message_id: str, body_text: str, reply_all: bool = False) -> str:
         timeout=30,
     )
     _check(resp, "draft update")
+
+    logo = _logo_attachment()
+    if logo:
+        resp = requests.post(
+            f"{GRAPH}/me/messages/{draft_id}/attachments",
+            headers=_headers(token),
+            json=logo,
+            timeout=30,
+        )
+        _check(resp, "signature logo")
 
     resp = requests.post(
         f"{GRAPH}/me/messages/{draft_id}/send",
@@ -305,12 +396,14 @@ def send_new_mail(to: list, subject: str, body_text: str, cc: list = None,
     token = get_access_token()
     message = {
         "subject": subject,
-        "body": {"contentType": "HTML", "content": text_to_html(body_text)},
+        "body": {"contentType": "HTML", "content": signed_html(body_text)},
         "toRecipients": _recipients(to),
         "ccRecipients": _recipients(cc),
     }
+    logo = _logo_attachment()
+    message["attachments"] = [logo] if logo else []
     if attachments:
-        message["attachments"] = [{
+        message["attachments"] += [{
             "@odata.type": "#microsoft.graph.fileAttachment",
             "name": name,
             "contentType": ctype or "application/octet-stream",
