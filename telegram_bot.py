@@ -10,6 +10,9 @@ What James can do from @miamirowan_bot:
     the project, and replies (a review, for documents)
   - /task /wait: straight into the action-item register (register.py), with Undo
   - /lead /note: one-line capture, confirmed with one tap
+  - /proposal: draft an owner's rep proposal, edit Attachment A and the
+    details, then Build saves the Word file to OneDrive and logs the lead
+    (proposals.py)
   - /list /waiting /done /review /minutes /flags: the register (register_telegram.py)
   - approve email replies: Send / Send + task / Edit / Discard / Later. Drafts
     arrive as emails land, 7am-7pm weekdays (graph_push.py)
@@ -61,7 +64,9 @@ HELP_TEXT = (
     "/inbox - emails you haven't answered\n"
     "/project 71 NoBE - one project's status\n"
     "/leads - the pipeline\n"
-    "/linkedin - draft a LinkedIn post now (one also comes daily at 9am)\n\n"
+    "/linkedin - draft a LinkedIn post now (one also comes daily at 9am)\n"
+    "/proposal Soundbath for Vishal Sapra, Celebration Ventures, 3114 N Bay Rd Miami; 410 NE 29th St; "
+    "DD 4 mo @ 5k, precon 12 @ 12k - draft a proposal (you edit the scope, then Build)\n\n"
     "ACTION ITEMS\n"
     "/task send Soundbath budget to Vishal Friday - something you owe\n"
     "/wait survey from Fortin, 71 NoBE, Tuesday - something you're waiting on\n"
@@ -704,6 +709,7 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
                 send_message("That draft was already handled.")
                 return done
             state_set("li_edit", {})
+            state_set("proposal_edit", {})
             state_set("edit_mode", {"draft_id": draft_id, "until": time.time() + EDIT_WINDOW_SECONDS})
             send_message(
                 "What should change? Type it or send a voice note. "
@@ -720,6 +726,7 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
             background.add_task(linkedin_action, action, int(ref))
         elif action == "liedit":
             state_set("edit_mode", {})
+            state_set("proposal_edit", {})
             state_set("li_edit", {"draft_id": int(ref), "until": time.time() + EDIT_WINDOW_SECONDS})
             send_message(
                 "What should change? Type it or send a voice note: \"shorter\", \"more on hurricane "
@@ -729,6 +736,15 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
                     {"text": "Skip today", "callback_data": f"liskip:{ref}"},
                 ]]},
             )
+        elif action in ("propbuild", "propscope", "propdetails", "propcancel"):
+            import proposals
+            if action == "propbuild":
+                send_message("Building the proposal...")
+                background.add_task(proposals.build)
+            elif action == "propcancel":
+                background.add_task(proposals.cancel)
+            else:
+                background.add_task(proposals.start_edit, "scope" if action == "propscope" else "details")
         elif action in ("ok", "cancel"):
             background.add_task(confirm_proposal, ref, action == "ok")
         return done
@@ -913,6 +929,20 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
         send_message("Drafting a LinkedIn post...")
         background.add_task(linkedin_on_demand)
         return done
+
+    if cmd in ("proposal", "proposals") and text.startswith("/"):
+        import proposals
+        if rest_full:
+            send_message("Drafting the proposal...")
+        background.add_task(proposals.start, rest_full)
+        return done
+
+    # Editing a proposal draft (after Edit scope / Edit details)?
+    if not text.startswith("/"):
+        import proposals
+        if proposals.edit_target():
+            background.add_task(proposals.apply_edit, text)
+            return done
 
     # Editing a draft (LinkedIn post or email reply)?
     target = edit_target(message)

@@ -58,3 +58,4 @@ resend
 python-multipart==0.0.20
 twilio
 tzdata
+python-docx==1.2.0

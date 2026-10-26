@@ -34,20 +34,58 @@ def safe_name(text: str, limit: int = 80) -> str:
     return text[:limit].rstrip(" .") or "file"
 
 
-def _item_path(folder: str, filename: str) -> str:
-    parts = [ROOT_FOLDER] + [p for p in folder.split("/") if p] + [filename]
+def _item_path(folder: str, filename: str, root: str = None) -> str:
+    base = ROOT_FOLDER if root is None else root
+    parts = [p for p in base.split("/") if p] + [p for p in folder.split("/") if p] + [filename]
     return "/".join(quote(p, safe="") for p in parts)
 
 
+def _quote_path(path: str) -> str:
+    return "/".join(quote(p, safe="") for p in path.split("/") if p)
+
+
+def download_path(path: str) -> bytes:
+    """Bytes of the file at an absolute OneDrive path, e.g. 'MCM/Templates/x.docx'."""
+    token = get_access_token(scopes=FILES_SCOPES)
+    resp = requests.get(
+        f"{GRAPH}/me/drive/root:/{_quote_path(path)}:/content",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=60,
+    )
+    if resp.status_code == 404:
+        raise FileNotFoundError(f"No file at OneDrive path {path}")
+    if resp.status_code >= 400:
+        raise RuntimeError(f"OneDrive download failed [{resp.status_code}]: {resp.text[:300]}")
+    return resp.content
+
+
+def list_children(path: str) -> list:
+    """[{'name', 'is_folder'}] for an absolute OneDrive folder path; [] if it doesn't exist."""
+    token = get_access_token(scopes=FILES_SCOPES)
+    url = f"{GRAPH}/me/drive/root:/{_quote_path(path)}:/children"
+    params = {"$select": "name,folder,file", "$top": "200"}
+    out = []
+    while url:
+        resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, params=params, timeout=30)
+        if resp.status_code == 404:
+            return []
+        if resp.status_code >= 400:
+            raise RuntimeError(f"OneDrive list failed [{resp.status_code}]: {resp.text[:300]}")
+        data = resp.json()
+        out += [{"name": i.get("name", ""), "is_folder": "folder" in i} for i in data.get("value", [])]
+        url, params = data.get("@odata.nextLink"), None
+    return out
+
+
 def upload_file(content: bytes, folder: str, filename: str,
-                content_type: str = "application/octet-stream") -> dict:
+                content_type: str = "application/octet-stream", root: str = None) -> dict:
     """
-    Upload bytes to Rowan/<folder>/<filename>. Returns
-    {"name", "web_url", "path", "id"}.
+    Upload bytes to Rowan/<folder>/<filename> (or <root>/<folder>/<filename>;
+    root="" means the drive root). Returns {"name", "web_url", "path", "id"}.
     """
     token = get_access_token(scopes=FILES_SCOPES)
     auth = {"Authorization": f"Bearer {token}"}
-    path = _item_path(folder, filename)
+    path = _item_path(folder, filename, root)
 
     if len(content) <= SIMPLE_UPLOAD_LIMIT:
         resp = requests.put(
