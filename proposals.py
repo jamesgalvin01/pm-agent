@@ -350,6 +350,7 @@ def start_edit(field: str) -> None:
         return
     state_set("edit_mode", {})
     state_set("li_edit", {})
+    state_set("invoice_edit", {})
     _set_edit_mode(field)
     if field == "scope":
         send_message("Send the new Attachment A (start with ## to replace it all), or tell me what to change: "

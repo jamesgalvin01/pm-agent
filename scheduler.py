@@ -184,6 +184,18 @@ def run_email_reply_job():
         report_failure("email draft approval notify")
 
 
+def run_invoice_email_job():
+    """
+    5th-12th, 8am-7pm Eastern: pick up the invoices the Mac generated
+    (invoices.json in the month's AR folder) and offer each cover email in
+    Telegram for Send / Edit / Skip. Nothing is sent here.
+    """
+    from invoice_emails import run_check
+    stats = run_check()
+    if stats.get("added") or stats.get("offered"):
+        log(f"Invoice emails: {stats}")
+
+
 # ----- Schedule -----
 schedule.every().monday.at("08:00").do(safe("weekly jobs", run_weekly_jobs))
 
@@ -197,6 +209,9 @@ schedule.every().day.at("09:00").do(safe("LinkedIn draft", run_linkedin_draft_jo
 # 15-minute backup. Drafts reach James 7am-7pm weekdays only.
 schedule.every(15).minutes.do(safe("email backup pass", run_email_reply_job))
 
+# Invoice cover emails: offered for approval once the Mac's 5th-of-month run lands.
+schedule.every(30).minutes.do(safe("invoice emails", run_invoice_email_job))
+
 # Rowan proactive nudges — DISABLED (James, Sep 2026: noon nudge was too much).
 # The job is still defined above; re-enable by uncommenting the line below.
 # schedule.every().day.at("12:00").do(safe("nudge pass", run_nudges_job))
@@ -208,6 +223,7 @@ log("- Inbox task scan and daily summary email: retired.")
 log("- Status reports run every Monday at 8am.")
 log("- LinkedIn draft sent every day at 9am (Telegram, or email if Telegram is off).")
 log("- Email reply drafts: real time as mail arrives, 15-min backup; offered 7am-7pm weekdays.")
+log("- Invoice emails: checked every 30 min, 5th-12th 8am-7pm; each sent only after a Telegram tap.")
 log("- Rowan nudges: disabled.")
 check_database()
 try:

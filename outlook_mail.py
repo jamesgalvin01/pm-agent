@@ -291,25 +291,36 @@ def _recipients(addresses) -> list:
     return [{"emailAddress": {"address": a}} for a in (addresses or [])]
 
 
-def send_new_mail(to: list, subject: str, body_text: str, cc: list = None) -> str:
+def send_new_mail(to: list, subject: str, body_text: str, cc: list = None,
+                  attachments: list = None) -> str:
     """
     Send a brand-new email (not a reply) from James's mailbox.
 
     Builds a draft first, then sends it, so it lands in Sent Items like any
     email he writes himself. Returns the draft's message id. Only called from
-    an approved action.
+    an approved action. attachments: [(filename, bytes, content_type)], each
+    under 3 MB (Graph's inline attachment limit).
     """
+    import base64
     token = get_access_token()
+    message = {
+        "subject": subject,
+        "body": {"contentType": "HTML", "content": text_to_html(body_text)},
+        "toRecipients": _recipients(to),
+        "ccRecipients": _recipients(cc),
+    }
+    if attachments:
+        message["attachments"] = [{
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            "name": name,
+            "contentType": ctype or "application/octet-stream",
+            "contentBytes": base64.b64encode(data).decode("ascii"),
+        } for name, data, ctype in attachments]
     resp = requests.post(
         f"{GRAPH}/me/messages",
         headers=_headers(token),
-        json={
-            "subject": subject,
-            "body": {"contentType": "HTML", "content": text_to_html(body_text)},
-            "toRecipients": _recipients(to),
-            "ccRecipients": _recipients(cc),
-        },
-        timeout=30,
+        json=message,
+        timeout=60,
     )
     _check(resp, "new draft")
     draft_id = resp.json()["id"]
