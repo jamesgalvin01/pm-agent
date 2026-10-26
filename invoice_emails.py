@@ -128,11 +128,11 @@ def _due_text(iso):
 
 
 def draft_email(inv, period_label):
-    first = (inv.get("contact_name") or "").split(" ")[0] or "there"
+    greet = (inv.get("contact_name") or "").strip()
     project = inv.get("project_name") or inv.get("client_name")
     subject = f"Miami Coastline Management – Invoice INV-{inv['invoice_number']} – {project} – {period_label}"
     body = (
-        f"Hi {first},\n\n"
+        (f"Hi {greet},\n\n" if greet else "Hello,\n\n") +
         f"Attached is Miami Coastline Management's invoice INV-{inv['invoice_number']} for "
         f"{period_label} owner's representative services on {project}, in the amount of "
         f"{_money(float(inv['amount']))}. Payment is due by {_due_text(inv.get('due_date'))}.\n\n"
