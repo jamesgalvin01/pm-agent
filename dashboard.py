@@ -163,6 +163,11 @@ BASE_CSS = """
         }
         .stat-card .number { font-size: 30px; font-weight: 700; letter-spacing: -1px; color: #5b7cfa; }
         .stat-card .number.green { color: #2bd4a0; }
+        a.stat-link { text-decoration: none; color: inherit; cursor: pointer;
+            transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease; }
+        a.stat-link:hover { border-color: #5b7cfa; background: #161a26; }
+        a.stat-link:active { transform: scale(0.98); }
+        .stat-link .stat-arrow { color: #5b7cfa; font-size: 14px; margin-left: 2px; }
         .stat-card .label {
             font-size: 11px; color: #6b7080; margin-top: 6px;
             text-transform: uppercase; letter-spacing: 0.8px;
@@ -958,8 +963,6 @@ def home(filter: str = "open", project: int = 0, ball: str = "", added: int = 0,
     projects = cur.fetchall()
     cur.execute("SELECT COUNT(*) FROM tasks WHERE status = 'open'")
     open_count = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM tasks WHERE status = 'complete'")
-    complete_count = cur.fetchone()[0]
 
     if filter == "open":
         tasks = reg.get_register(project=project or None, ball=ball or None)
@@ -986,6 +989,9 @@ def home(filter: str = "open", project: int = 0, ball: str = "", added: int = 0,
 
     rag_colors = {"green": "#2bd4a0", "amber": "#f5a623", "red": "#ff6b6b"}
     tier_colors = {1: "#ff6b6b", 2: "#f5a623", 3: "#c792ea", 4: "#5ab0ff", 5: "#8b90a0"}
+
+    open_active = ("outline:2px solid #5ab0ff;"
+                   if filter == "open" and not project and not ball else "")
 
     def link(**kw):
         q = {"filter": filter, "project": project, "ball": ball}
@@ -1145,16 +1151,12 @@ def home(filter: str = "open", project: int = 0, ball: str = "", added: int = 0,
             <div class='section-title'>Projects <span style='color:#565a6b;font-weight:400;text-transform:none;letter-spacing:0;'>· tap one for its register</span></div>
             <div class='cards'>
                 {projects_html}
-                <div class='stat-card'>
+                <a href='/?filter=open#register' class='stat-card stat-link' style='{open_active}'>
                     <div class='number'>{open_count}</div>
-                    <div class='label'>Open Tasks</div>
-                </div>
-                <div class='stat-card'>
-                    <div class='number green'>{complete_count}</div>
-                    <div class='label'>Completed</div>
-                </div>
+                    <div class='label'>Open Tasks <span class='stat-arrow'>&rsaquo;</span></div>
+                </a>
             </div>
-            <div class='section-title'>{esc(title)} ({len(tasks)})</div>
+            <div class='section-title' id='register' style='scroll-margin-top:16px;'>{esc(title)} ({len(tasks)})</div>
             {added_note}
             {add_task_html}
             <div class='filters'>{filters}</div>
