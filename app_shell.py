@@ -14,11 +14,13 @@ Shared by dashboard.py and chat.py, so it imports neither.
 """
 import os
 
+from theme import THEME_CSS
+
 from fastapi import APIRouter
 from fastapi.responses import FileResponse, JSONResponse
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-THEME = "#0a0b0f"
+THEME = "#14113A"
 
 router = APIRouter()
 
@@ -36,8 +38,9 @@ APP_HEAD = f"""
         <link rel='icon' type='image/png' sizes='192x192' href='/static/icon-192.png?v=2'>
         <style>
             .logo.brand-logo {{ background: none !important; overflow: hidden; padding: 0;
-                               box-shadow: 0 0 18px rgba(41,200,230,0.25) !important; }}
+                               box-shadow: 0 0 18px rgba(255,79,139,0.3) !important; }}
             .logo.brand-logo img {{ width: 100%; height: 100%; display: block; }}
+            {THEME_CSS}
         </style>"""
 
 
@@ -79,17 +82,17 @@ MOBILE_CSS = """
 
             .tabbar {
                 display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
-                background: rgba(13,15,21,0.96); border-top: 1px solid #1c1f2a;
+                background: rgba(27,23,71,0.96); border-top: 1px solid #352F78;
                 padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
                 -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
             }
             .tabbar a {
                 flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;
-                color: #6b7080; text-decoration: none; font-size: 11px; padding: 6px 0;
+                color: #9993D0; text-decoration: none; font-size: 11px; padding: 6px 0;
                 -webkit-tap-highlight-color: transparent;
             }
             .tabbar a i { font-size: 23px; }
-            .tabbar a.active { color: #5b7cfa; }
+            .tabbar a.active { color: #B45CF0; }
 
             /* project cards become a swipeable strip */
             .cards {
@@ -119,13 +122,13 @@ MOBILE_CSS = """
         /* task cards (phone) */
         .tcards { display: flex; flex-direction: column; gap: 10px; }
         .tcard {
-            background: #12141c; border: 1px solid #1c1f2a; border-left: 3px solid #8b90a0;
+            background: #221D58; border: 1px solid #352F78; border-left: 3px solid #ABA6DD;
             border-radius: 14px; padding: 14px 14px 12px;
         }
         .tcard .t-top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
-        .tcard .t-desc { font-size: 15px; line-height: 1.4; color: #e8eaf0; font-weight: 500; }
-        .tcard .t-id { font-size: 12px; color: #565a6b; flex-shrink: 0; }
-        .tcard .t-meta { font-size: 13px; color: #8b90a0; margin-top: 6px; line-height: 1.5; }
+        .tcard .t-desc { font-size: 15px; line-height: 1.4; color: #F3F1FF; font-weight: 500; }
+        .tcard .t-id { font-size: 12px; color: #847FC0; flex-shrink: 0; }
+        .tcard .t-meta { font-size: 13px; color: #ABA6DD; margin-top: 6px; line-height: 1.5; }
         .tcard .t-tier { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; margin-top: 8px; }
         .tcard .t-actions { display: flex; gap: 8px; margin-top: 12px; }
         .tcard .t-actions form { flex: 1; margin: 0; }
@@ -135,9 +138,9 @@ MOBILE_CSS = """
             -webkit-tap-highlight-color: transparent;
         }
         .tcard .t-done { background: rgba(43,212,160,0.14); color: #2bd4a0; }
-        .tcard .t-snooze { background: rgba(139,144,160,0.14); color: #b4b8c6; }
-        .tcard .t-open { background: rgba(91,124,250,0.14); color: #8ea4ff; }
-        .tcard.complete .t-desc { color: #565a6b; text-decoration: line-through; }
+        .tcard .t-snooze { background: rgba(171,166,221,0.14); color: #CBC7F0; }
+        .tcard .t-open { background: rgba(180,92,240,0.14); color: #E0B0FF; }
+        .tcard.complete .t-desc { color: #847FC0; text-decoration: line-through; }
 """
 
 
