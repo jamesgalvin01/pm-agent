@@ -94,6 +94,19 @@ def ensure_register_schema() -> None:
                 decided_at TIMESTAMPTZ
             )
         """)
+        # Progress log: dated notes on a task that's moving but not finished.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS task_updates (
+                id SERIAL PRIMARY KEY,
+                task_id INTEGER NOT NULL,
+                body TEXT,
+                action TEXT,
+                action_detail TEXT,
+                source TEXT DEFAULT 'dashboard',
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS task_updates_task_idx ON task_updates (task_id, created_at DESC)")
         # What each capture path has already looked at, so nothing is
         # processed twice (a flagged email, a sent-mail thread, a meeting).
         cur.execute("""
@@ -419,6 +432,128 @@ def complete_task(task_id: int, sync_flag: bool = True):
             except Exception as e:
                 print(f"[register] could not clear Outlook flag for task {task_id}: {e}")
     return task
+
+
+# ============================================================
+# PROGRESS LOG
+# ============================================================
+
+UPDATE_ACTIONS = ("waiting", "mine", "push", "done")
+UPDATE_SOURCES = {"dashboard": "Dashboard", "telegram": "Telegram", "voice": "Telegram voice note",
+                  "field": "Field", "chat": "Chat"}
+
+
+def add_update(task_id: int, body: str = "", source: str = "dashboard", action: str = None,
+               waiting_on: str = None, due_date=None):
+    """
+    Log progress on a task, optionally changing it in the same step:
+      action='waiting'  ball goes to someone else (waiting_on), stale clock starts
+      action='mine'     ball comes back to James
+      action='push'     new due date
+      action='done'     close it
+    Any update counts as movement (last_touched_at). Returns the saved update, or None.
+    """
+    ensure_register_schema()
+    body = (body or "").strip()
+    action = action if action in UPDATE_ACTIONS else None
+    task = get_task(task_id)
+    if not task or (not body and not action):
+        return None
+
+    detail = None
+    if action == "waiting":
+        who = (waiting_on or "").strip() or task.get("waiting_on")
+        update_task(task_id, ball_in_court="waiting", waiting_on=who)
+        detail = f"Now waiting on {who}" if who else "Now waiting on others"
+    elif action == "mine":
+        update_task(task_id, ball_in_court="me", waiting_on=None)
+        detail = "Back with you"
+    elif action == "push":
+        new_due = parse_due(due_date) if due_date else None
+        if not new_due:
+            new_due = max(today(), task["due_date"] or today()) + timedelta(days=3)
+        update_task(task_id, due_date=new_due)
+        detail = f"Due date moved to {short_date(new_due)}"
+    elif action == "done":
+        complete_task(task_id)
+        detail = "Marked done"
+    else:
+        touch(task_id)
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""INSERT INTO task_updates (task_id, body, action, action_detail, source)
+                       VALUES (%s, %s, %s, %s, %s) RETURNING id, created_at""",
+                    (task_id, body or None, action, detail, source))
+        uid, created = cur.fetchone()
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    return {"id": uid, "task_id": task_id, "body": body, "action": action, "action_detail": detail,
+            "source": source, "created_at": created, "task": task}
+
+
+def get_updates(task_id: int) -> list:
+    """A task's progress log, newest first."""
+    ensure_register_schema()
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""SELECT id, task_id, body, action, action_detail, source, created_at
+                         FROM task_updates WHERE task_id = %s ORDER BY created_at DESC, id DESC""", (task_id,))
+        return _rows(cur)
+    finally:
+        cur.close()
+        conn.close()
+
+
+def latest_updates(task_ids) -> dict:
+    """{task_id: {"body", "action_detail", "created_at", "count"}} for the register's one-line preview."""
+    ids = [int(i) for i in task_ids or []]
+    if not ids:
+        return {}
+    ensure_register_schema()
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT DISTINCT ON (task_id) task_id, body, action_detail, created_at,
+                   COUNT(*) OVER (PARTITION BY task_id) AS count
+              FROM task_updates WHERE task_id = ANY(%s)
+             ORDER BY task_id, created_at DESC, id DESC""", (ids,))
+        return {r["task_id"]: r for r in _rows(cur)}
+    finally:
+        cur.close()
+        conn.close()
+
+
+def delete_update(update_id: int) -> bool:
+    """Undo a logged note (the task change it made, if any, stays)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM task_updates WHERE id = %s", (update_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        cur.close()
+        conn.close()
+
+
+def when(ts) -> str:
+    """'Today 2:40 PM', 'Yesterday 9:05 AM', 'Wed 11/4'."""
+    if not ts:
+        return ""
+    local = ts.astimezone(ET) if getattr(ts, "tzinfo", None) else ts
+    d = local.date()
+    clock = local.strftime("%-I:%M %p")
+    if d == today():
+        return f"Today {clock}"
+    if d == today() - timedelta(days=1):
+        return f"Yesterday {clock}"
+    return short_date(d)
 
 
 def delete_task(task_id: int) -> bool:

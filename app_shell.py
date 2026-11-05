@@ -140,6 +140,10 @@ MOBILE_CSS = """
         .tcard .t-done { background: rgba(43,212,160,0.14); color: #2bd4a0; }
         .tcard .t-snooze { background: rgba(171,166,221,0.14); color: #CBC7F0; }
         .tcard .t-open { background: rgba(180,92,240,0.14); color: #E0B0FF; }
+        .tcard .t-actions a.t-log {
+            flex: 1; min-height: 44px; border-radius: 10px; font-size: 14px; font-weight: 600; text-decoration: none;
+            display: flex; align-items: center; justify-content: center; gap: 6px; -webkit-tap-highlight-color: transparent;
+        }
         .tcard.complete .t-desc { color: #847FC0; text-decoration: line-through; }
 """
 
