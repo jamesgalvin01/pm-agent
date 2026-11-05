@@ -32,7 +32,7 @@ router = APIRouter()
 
 esc = lambda v: html.escape(str(v or ""))
 
-TIER_COLOR = {1: "#ff6b6b", 2: "#f5a623", 3: "#5b7cfa", 4: "#b48cff", 5: "#3a3f50"}
+TIER_COLOR = {1: "#FF5C8A", 2: "#f5a623", 3: "#B45CF0", 4: "#b48cff", 5: "#4A4396"}
 
 
 # ============================================================
@@ -68,116 +68,116 @@ def _visible_projects(user: dict) -> list:
 FIELD_CSS = """
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
-body { margin: 0; background: #0a0b0f; color: #d4d7e0; -webkit-font-smoothing: antialiased;
-       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+body { margin: 0; background: #14113A; color: #E6E3FF; -webkit-font-smoothing: antialiased;
+       font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
        padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
 a { color: inherit; }
-.top { position: sticky; top: 0; z-index: 20; background: rgba(13,15,21,0.96);
+.top { position: sticky; top: 0; z-index: 20; background: rgba(27,23,71,0.96);
        -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
-       border-bottom: 1px solid #1c1f2a; padding: calc(12px + env(safe-area-inset-top)) 16px 12px;
+       border-bottom: 1px solid #352F78; padding: calc(12px + env(safe-area-inset-top)) 16px 12px;
        display: flex; align-items: center; gap: 12px; }
 .top .logo { width: 34px; height: 34px; border-radius: 9px; overflow: hidden; flex-shrink: 0; }
 .top .logo img { width: 100%; height: 100%; display: block; }
 .top .t { flex: 1; min-width: 0; }
-.top .t h1 { margin: 0; font-size: 16px; font-weight: 600; color: #f4f5f8; white-space: nowrap;
+.top .t h1 { margin: 0; font-size: 16px; font-weight: 600; color: #FFFFFF; white-space: nowrap;
              overflow: hidden; text-overflow: ellipsis; }
-.top .t .who { font-size: 12px; color: #6b7080; margin-top: 1px; }
+.top .t .who { font-size: 12px; color: #9993D0; margin-top: 1px; }
 .top .act { display: flex; gap: 6px; align-items: center; }
-.top .act a, .top .act button { background: none; border: none; color: #8b90a0; font-size: 21px;
+.top .act a, .top .act button { background: none; border: none; color: #ABA6DD; font-size: 21px;
        padding: 6px; cursor: pointer; text-decoration: none; display: flex; }
 .wrap { max-width: 760px; margin: 0 auto; padding: 16px; }
-.h { font-size: 11px; font-weight: 600; color: #565a6b; text-transform: uppercase;
+.h { font-size: 11px; font-weight: 600; color: #847FC0; text-transform: uppercase;
      letter-spacing: 1.4px; margin: 22px 0 10px; }
 .h:first-child { margin-top: 4px; }
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-.stat { background: #12141c; border: 1px solid #1c1f2a; border-radius: 12px; padding: 12px 10px;
+.stat { background: #221D58; border: 1px solid #352F78; border-radius: 12px; padding: 12px 10px;
         text-decoration: none; display: block; }
 .stat .n { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
-.stat .l { font-size: 10.5px; color: #6b7080; text-transform: uppercase; letter-spacing: 0.6px; margin-top: 2px; }
-.stat.on { border-color: #5b7cfa; }
+.stat .l { font-size: 10.5px; color: #9993D0; text-transform: uppercase; letter-spacing: 0.6px; margin-top: 2px; }
+.stat.on { border-color: #B45CF0; }
 .chips { display: flex; gap: 8px; overflow-x: auto; margin: 14px -16px 4px; padding: 0 16px; }
 .chips::-webkit-scrollbar { display: none; }
-.chip { flex-shrink: 0; font-size: 13px; padding: 8px 14px; border-radius: 20px; border: 1px solid #1c1f2a;
-        color: #8b90a0; text-decoration: none; white-space: nowrap; background: none; font-family: inherit; }
-.chip.on { background: #5b7cfa; border-color: #5b7cfa; color: #fff; }
-.item { background: #12141c; border: 1px solid #1c1f2a; border-left: 3px solid #3a3f50;
+.chip { flex-shrink: 0; font-size: 13px; padding: 8px 14px; border-radius: 20px; border: 1px solid #352F78;
+        color: #ABA6DD; text-decoration: none; white-space: nowrap; background: none; font-family: inherit; }
+.chip.on { background: #B45CF0; border-color: #B45CF0; color: #fff; }
+.item { background: #221D58; border: 1px solid #352F78; border-left: 3px solid #4A4396;
         border-radius: 14px; padding: 14px; margin-bottom: 10px; }
-.item .d { font-size: 15px; line-height: 1.4; color: #e8eaf0; font-weight: 500; }
-.item .d .id { color: #565a6b; font-weight: 400; font-size: 12px; margin-right: 4px; }
-.item .m { font-size: 13px; color: #8b90a0; margin-top: 6px; line-height: 1.5; }
+.item .d { font-size: 15px; line-height: 1.4; color: #F3F1FF; font-weight: 500; }
+.item .d .id { color: #847FC0; font-weight: 400; font-size: 12px; margin-right: 4px; }
+.item .m { font-size: 13px; color: #ABA6DD; margin-top: 6px; line-height: 1.5; }
 .item .tier { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; margin-top: 8px; }
-.item .by { font-size: 11.5px; color: #565a6b; margin-top: 4px; }
+.item .by { font-size: 11.5px; color: #847FC0; margin-top: 4px; }
 .row { display: flex; gap: 8px; margin-top: 12px; }
 .row form { flex: 1; margin: 0; }
 .b { width: 100%; min-height: 44px; border: none; border-radius: 10px; font-family: inherit; font-size: 14px;
      font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer;
      -webkit-tap-highlight-color: transparent; }
 .b-done { background: rgba(43,212,160,0.14); color: #2bd4a0; }
-.b-grey { background: rgba(139,144,160,0.14); color: #b4b8c6; }
-.b-blue { background: #5b7cfa; color: #fff; }
+.b-grey { background: rgba(171,166,221,0.14); color: #CBC7F0; }
+.b-blue { background: #B45CF0; color: #fff; }
 details.more { margin-top: 10px; }
-details.more summary { font-size: 13px; color: #6b7080; cursor: pointer; list-style: none; padding: 6px 0; }
+details.more summary { font-size: 13px; color: #9993D0; cursor: pointer; list-style: none; padding: 6px 0; }
 details.more summary::-webkit-details-marker { display: none; }
-.f { background: #12141c; border: 1px solid #1c1f2a; border-radius: 14px; padding: 14px; margin-bottom: 14px; }
-.f summary { font-weight: 600; color: #e8eaf0; cursor: pointer; list-style: none; display: flex;
+.f { background: #221D58; border: 1px solid #352F78; border-radius: 14px; padding: 14px; margin-bottom: 14px; }
+.f summary { font-weight: 600; color: #F3F1FF; cursor: pointer; list-style: none; display: flex;
              align-items: center; gap: 8px; font-size: 15px; }
 .f summary::-webkit-details-marker { display: none; }
 .f[open] summary { margin-bottom: 12px; }
-label { display: block; font-size: 11px; color: #6b7080; text-transform: uppercase; letter-spacing: 0.5px;
+label { display: block; font-size: 11px; color: #9993D0; text-transform: uppercase; letter-spacing: 0.5px;
         margin: 10px 0 5px; }
 input, select, textarea { width: 100%; font-family: inherit; font-size: 16px; padding: 11px 12px;
-        background: #0a0b0f; border: 1px solid #1c1f2a; border-radius: 10px; color: #d4d7e0; }
+        background: #14113A; border: 1px solid #352F78; border-radius: 10px; color: #E6E3FF; }
 textarea { min-height: 110px; resize: vertical; line-height: 1.45; }
-input:focus, select:focus, textarea:focus { outline: none; border-color: #5b7cfa; }
+input:focus, select:focus, textarea:focus { outline: none; border-color: #B45CF0; }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .check { display: flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0;
-         font-size: 14px; color: #b4b8c6; margin-top: 12px; }
+         font-size: 14px; color: #CBC7F0; margin-top: 12px; }
 .check input { width: auto; }
-.empty { color: #565a6b; text-align: center; padding: 26px 10px; font-size: 14px; }
+.empty { color: #847FC0; text-align: center; padding: 26px 10px; font-size: 14px; }
 .ok { background: rgba(43,212,160,0.12); color: #2bd4a0; border-radius: 10px; padding: 11px 14px;
       font-size: 14px; margin-bottom: 12px; }
-.ms { display: flex; align-items: center; gap: 12px; background: #12141c; border: 1px solid #1c1f2a;
+.ms { display: flex; align-items: center; gap: 12px; background: #221D58; border: 1px solid #352F78;
       border-radius: 12px; padding: 12px 14px; margin-bottom: 8px; }
 .ms .x { flex: 1; min-width: 0; }
-.ms .x .nm { font-size: 14.5px; color: #e8eaf0; font-weight: 500; }
-.ms .x .dt { font-size: 12.5px; color: #8b90a0; margin-top: 2px; }
-.ms.done .nm { color: #565a6b; text-decoration: line-through; }
+.ms .x .nm { font-size: 14.5px; color: #F3F1FF; font-weight: 500; }
+.ms .x .dt { font-size: 12.5px; color: #ABA6DD; margin-top: 2px; }
+.ms.done .nm { color: #847FC0; text-decoration: line-through; }
 .ms form button { background: rgba(43,212,160,0.14); color: #2bd4a0; border: none; border-radius: 9px;
       min-width: 44px; min-height: 40px; font-size: 18px; cursor: pointer; }
-.note { background: #12141c; border: 1px solid #1c1f2a; border-radius: 12px; padding: 13px 14px; margin-bottom: 8px; }
-.note .tx { font-size: 14px; line-height: 1.5; color: #d4d7e0; white-space: pre-wrap; }
-.note .mt { font-size: 11.5px; color: #565a6b; margin-top: 8px; }
+.note { background: #221D58; border: 1px solid #352F78; border-radius: 12px; padding: 13px 14px; margin-bottom: 8px; }
+.note .tx { font-size: 14px; line-height: 1.5; color: #E6E3FF; white-space: pre-wrap; }
+.note .mt { font-size: 11.5px; color: #847FC0; margin-top: 8px; }
 .tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex;
-        background: rgba(13,15,21,0.96); border-top: 1px solid #1c1f2a;
+        background: rgba(27,23,71,0.96); border-top: 1px solid #352F78;
         -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
         padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); }
-.tabs a { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; color: #6b7080;
+.tabs a { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; color: #9993D0;
           text-decoration: none; font-size: 11px; padding: 6px 0; -webkit-tap-highlight-color: transparent; }
 .tabs a i { font-size: 23px; }
-.tabs a.on { color: #5b7cfa; }
-.pick a { display: flex; justify-content: space-between; align-items: center; background: #12141c;
-          border: 1px solid #1c1f2a; border-radius: 14px; padding: 16px; margin-bottom: 10px;
-          text-decoration: none; color: #e8eaf0; font-weight: 500; }
-.pick a span { color: #6b7080; font-size: 13px; font-weight: 400; }
+.tabs a.on { color: #B45CF0; }
+.pick a { display: flex; justify-content: space-between; align-items: center; background: #221D58;
+          border: 1px solid #352F78; border-radius: 14px; padding: 16px; margin-bottom: 10px;
+          text-decoration: none; color: #F3F1FF; font-weight: 500; }
+.pick a span { color: #9993D0; font-size: 13px; font-weight: 400; }
 /* chat */
 .msgs { display: flex; flex-direction: column; gap: 10px; padding-bottom: 150px; }
 .msg { max-width: 88%; padding: 11px 14px; border-radius: 16px; font-size: 14.5px; line-height: 1.5;
        white-space: pre-wrap; word-wrap: break-word; }
-.msg.user { align-self: flex-end; background: #5b7cfa; color: #fff; border-bottom-right-radius: 5px; }
-.msg.assistant { align-self: flex-start; background: #12141c; border: 1px solid #1c1f2a; color: #d4d7e0;
+.msg.user { align-self: flex-end; background: #B45CF0; color: #fff; border-bottom-right-radius: 5px; }
+.msg.assistant { align-self: flex-start; background: #221D58; border: 1px solid #352F78; color: #E6E3FF;
                  border-bottom-left-radius: 5px; }
-.msg.wait { color: #6b7080; font-style: italic; }
+.msg.wait { color: #9993D0; font-style: italic; }
 .composer { position: fixed; left: 0; right: 0; bottom: calc(62px + env(safe-area-inset-bottom)); z-index: 25;
-            background: rgba(10,11,15,0.97); border-top: 1px solid #1c1f2a; padding: 10px 12px; }
+            background: rgba(20,17,58,0.97); border-top: 1px solid #352F78; padding: 10px 12px; }
 .composer .in { max-width: 760px; margin: 0 auto; }
 .composer .qs { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 8px; }
 .composer .qs::-webkit-scrollbar { display: none; }
 .composer .qs button { flex-shrink: 0; font-size: 12.5px; padding: 6px 12px; border-radius: 16px;
-            border: 1px solid #1c1f2a; background: none; color: #8b90a0; font-family: inherit; cursor: pointer; }
+            border: 1px solid #352F78; background: none; color: #ABA6DD; font-family: inherit; cursor: pointer; }
 .composer .bar { display: flex; gap: 8px; align-items: flex-end; }
 .composer textarea { min-height: 44px; max-height: 140px; height: 44px; padding: 11px 12px; }
 .composer .send { width: 48px; height: 44px; flex-shrink: 0; border: none; border-radius: 10px;
-            background: #5b7cfa; color: #fff; font-size: 20px; cursor: pointer; }
+            background: #B45CF0; color: #fff; font-size: 20px; cursor: pointer; }
 .composer .send:disabled { opacity: 0.4; }
 @media (min-width: 761px) { .wrap { padding: 24px; } }
 """
@@ -185,7 +185,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: #5b7cfa
 FONTS = """
     <link rel='preconnect' href='https://fonts.googleapis.com'>
     <link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
-    <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap' rel='stylesheet'>
+    <link href='https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap' rel='stylesheet'>
     <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.7.0/dist/tabler-icons.min.css'>"""
 
 
@@ -243,7 +243,7 @@ def field_admin(ok: str = "", email: str = Depends(require_auth)):
     for u in list_field_users():
         state = "Active" if u["active"] else "Off"
         rows += f"""
-        <div class='item' style='border-left-color:{"#2bd4a0" if u["active"] else "#3a3f50"}'>
+        <div class='item' style='border-left-color:{"#2bd4a0" if u["active"] else "#4A4396"}'>
           <div class='d'>{esc(u['name'] or u['email'])}</div>
           <div class='m'>{esc(u['email'])}<br>{esc(u['projects'] or 'No project')} &middot; {state}</div>
           <div class='row'><form method='post' action='/field/admin/{u["id"]}/toggle'>
@@ -259,7 +259,7 @@ def field_admin(ok: str = "", email: str = Depends(require_auth)):
         <label>Email</label><input name='user_email' type='email' required autocomplete='off'>
         <label>Project</label><select name='project_id'>{opts}</select>
         <div class='row'><button class='b b-blue'>Give access</button></div>
-        <div class='m' style='font-size:13px;color:#6b7080;margin-top:10px;line-height:1.5'>
+        <div class='m' style='font-size:13px;color:#9993D0;margin-top:10px;line-height:1.5'>
           They sign in at the same Rowan address with their email and a 6-digit code, and only see
           this project: its action items, log and a project-only Rowan. No email, leads or other projects.</div>
       </form>
@@ -322,14 +322,14 @@ def _counts(rows: list) -> dict:
 
 
 def _item_card(r: dict, pid: int, creators: dict) -> str:
-    color = TIER_COLOR.get(r["tier"], "#3a3f50")
+    color = TIER_COLOR.get(r["tier"], "#4A4396")
     if r["ball_in_court"] == "waiting":
         court = f"<i class='ti ti-hourglass'></i> Waiting on {esc(r['waiting_on'] or 'someone')}"
     else:
         court = "<i class='ti ti-user'></i> Ours"
     due = f"Due {register.short_date(r['due_date'])}"
     if r["tier"] == 1 and r.get("days_overdue"):
-        due = f"<span style='color:#ff6b6b'>{r['days_overdue']}d overdue</span>"
+        due = f"<span style='color:#FF5C8A'>{r['days_overdue']}d overdue</span>"
     elif r["tier"] == 4:
         due += f" &middot; <span style='color:#b48cff'>no movement {r.get('idle_days')}d</span>"
     flags = " &middot; <span style='color:#f5a623'>Blocking</span>" if r["blocking"] else ""
@@ -412,10 +412,10 @@ def field_items(project_id: int, show: str = "all", added: int = 0,
     body = f"""
       {notice}
       <div class='stats'>
-        {stat('overdue', c['overdue'], 'Overdue', '#ff6b6b' if c['overdue'] else '#565a6b')}
-        {stat('soon', c['soon'], 'Due 48h', '#f5a623' if c['soon'] else '#565a6b')}
-        {stat('stale', c['stale'], 'Stale', '#b48cff' if c['stale'] else '#565a6b')}
-        {stat('all', c['open'], 'Open', '#5b7cfa')}
+        {stat('overdue', c['overdue'], 'Overdue', '#FF5C8A' if c['overdue'] else '#847FC0')}
+        {stat('soon', c['soon'], 'Due 48h', '#f5a623' if c['soon'] else '#847FC0')}
+        {stat('stale', c['stale'], 'Stale', '#b48cff' if c['stale'] else '#847FC0')}
+        {stat('all', c['open'], 'Open', '#B45CF0')}
       </div>
       <div class='chips'>
         {chip('all', f"All {c['open']}")}{chip('ours', 'Ours')}{chip('waiting', f"Waiting on others {c['waiting']}")}
@@ -436,7 +436,7 @@ def field_items(project_id: int, show: str = "all", added: int = 0,
           <label class='check'><input type='checkbox' name='blocking' value='1'>
             Blocking (owner decision, permit, inspection or site work)</label>
           <div class='row'><button class='b b-blue'>Add item</button></div>
-          <div class='m' style='font-size:12.5px;color:#565a6b;margin-top:8px'>No date = 7 days from today.</div>
+          <div class='m' style='font-size:12.5px;color:#847FC0;margin-top:8px'>No date = 7 days from today.</div>
         </form>
       </details>
       <div class='h'>Action items</div>
