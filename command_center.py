@@ -128,7 +128,7 @@ def _day(d, today) -> str:
 
 
 def render(data: dict, today_items: list, link, selected_project: int = 0, tier_colors=None,
-           tier_labels=None, short_date=str) -> str:
+           tier_labels=None, short_date=str, latest=None) -> str:
     esc = html.escape
     tier_colors = tier_colors or {}
     tier_labels = tier_labels or {}
@@ -170,10 +170,13 @@ def render(data: dict, today_items: list, link, selected_project: int = 0, tier_
         why = tier_labels.get(tier, "") if tier else ""
         due = f"due {short_date(t['due_date'])}" if t.get("due_date") else ""
         meta = " · ".join(x for x in (esc(t.get("project") or "No project"), due, esc(why)) if x)
+        u = (latest or {}).get(t["id"])
+        last = (f"<div class='ti-u'><i class='ti ti-message-2'></i> {esc(u.get('body') or u.get('action_detail') or '')}</div>"
+                if u else "")
         items += f"""
         <div class='today-item {hot}'>
             <form method='post' action='/complete/{t["id"]}'><button title='Mark done' aria-label='Mark done'><i class='ti ti-check'></i></button></form>
-            <div><div class='ti-d'>{esc(t["description"] or "")}</div><div class='ti-m'>{meta}</div></div>
+            <a class='ti-body' href='/task/{t["id"]}'><div class='ti-d'>{esc(t["description"] or "")}</div><div class='ti-m'>{meta}</div>{last}</a>
         </div>"""
     if not items:
         items = "<div class='empty'>Nothing pressing. Nice.</div>"
@@ -258,6 +261,9 @@ CSS = """
         .today-item button:hover { background: rgba(255,255,255,0.25); }
         .ti-d { font-size: 13px; color: #FFFFFF; line-height: 1.35; font-weight: 500; }
         .ti-m { font-size: 11px; color: rgba(255,255,255,0.72); margin-top: 2px; }
+        .ti-body { text-decoration: none; color: inherit; min-width: 0; flex: 1; }
+        .ti-u { font-size: 11px; color: rgba(255,255,255,0.88); margin-top: 4px; white-space: nowrap; overflow: hidden;
+                text-overflow: ellipsis; }
         @media (max-width: 1000px) {
             .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .cc-mid, .cc-bot { grid-template-columns: minmax(0, 1fr); }

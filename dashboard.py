@@ -492,6 +492,63 @@ def reopen_task(task_id: int, email: str = Depends(require_auth)):
     return RedirectResponse(url="/", status_code=303)
 
 
+def _safe_back(back: str, default: str = "/#register") -> str:
+    back = (back or "").strip()
+    return back if back.startswith("/") and not back.startswith("//") else default
+
+
+@app.get("/task/{task_id}", response_class=HTMLResponse)
+def task_page(task_id: int, back: str = "", saved: int = 0, err: str = "", email: str = Depends(require_auth)):
+    """One task: its progress log and the add-update form."""
+    import register as reg
+    import task_log
+    t = reg.get_task(task_id)
+    if not t:
+        return RedirectResponse(url="/#register", status_code=303)
+    errors = {"empty": "Write what happened, or pick Waiting on, Push date or Done."}
+    body = task_log.page(t, reg.get_updates(task_id), back=_safe_back(back),
+                         error=errors.get(err, ""), saved=bool(saved))
+    return f"""
+    <html>
+    {page_head(_html.escape(t["description"] or "Task") + " · Rowan")}
+    <body>
+    <style>{command_center.CSS}{task_log.CSS}</style>
+        {header_html(email, "dashboard")}
+        <div class='container'>{body}</div>
+    </body>
+    </html>"""
+
+
+@app.post("/task/{task_id}/update")
+def task_add_update(
+    task_id: int,
+    body: str = Form(""),
+    action: str = Form(""),
+    waiting_on: str = Form(""),
+    due_date: str = Form(""),
+    back: str = Form(""),
+    email: str = Depends(require_auth),
+):
+    """Log progress; optionally hand it off (waiting), take it back, push the date or close it."""
+    from urllib.parse import quote
+    import register as reg
+    back = _safe_back(back)
+    if action == "push" and not due_date:
+        due_date = None            # add_update pushes 3 days when no date is picked
+    saved = reg.add_update(task_id, body=body, source="dashboard", action=action or None,
+                           waiting_on=waiting_on, due_date=due_date)
+    if not saved:
+        return RedirectResponse(url=f"/task/{task_id}?err=empty&back={quote(back)}", status_code=303)
+    return RedirectResponse(url=f"/task/{task_id}?saved=1&back={quote(back)}", status_code=303)
+
+
+@app.post("/task/{task_id}/update/{update_id}/delete")
+def task_delete_update(task_id: int, update_id: int, request: Request, email: str = Depends(require_auth)):
+    import register as reg
+    reg.delete_update(update_id)
+    return RedirectResponse(url=request.headers.get("referer") or f"/task/{task_id}", status_code=303)
+
+
 # ============================================================
 # LEADS ROUTES
 # ============================================================
@@ -1013,9 +1070,17 @@ def home(filter: str = "open", project: int = 0, ball: str = "", added: int = 0,
             <p class='meta'>{esc(p[2] or '')}</p>
         </a>"""
 
+    from urllib.parse import quote
+    import task_log
+    latest = reg.latest_updates([t["id"] for t in tasks])
+    back_q = quote(link() + "#register")
+
     tasks_html = ""
     cards_html = ""
     for t in tasks:
+        task_url = f"/task/{t['id']}?back={back_q}"
+        last_html = task_log.latest_line(latest.get(t["id"]), t["id"]).replace(
+            f"href='/task/{t['id']}'", f"href='{task_url}'")
         is_complete = t["status"] == "complete"
         action_btn = f"""
             <form method='post' action='/reopen/{t["id"]}' style='display:inline'>
@@ -1024,7 +1089,7 @@ def home(filter: str = "open", project: int = 0, ball: str = "", added: int = 0,
             <form method='post' action='/complete/{t["id"]}' style='display:inline'>
                 <button type='submit' class='btn btn-done'><i class='ti ti-check'></i> Done</button>
             </form>"""
-        desc = esc(t["description"] or "")
+        desc = f"<a class='task-link' href='{task_url}'>{esc(t['description'] or '')}</a>"
         if t.get("source_url"):
             desc += f" <a href='{esc(t['source_url'])}' target='_blank' title='Open the email' style='color:#FF8FC4;'><i class='ti ti-mail'></i></a>"
         if t.get("blocking"):
@@ -1038,12 +1103,12 @@ def home(filter: str = "open", project: int = 0, ball: str = "", added: int = 0,
         tasks_html += f"""
         <tr class='{"complete" if is_complete else ""}'>
             <td style='color:#9993D0;'>#{t["id"]}</td>
-            <td>{task_text}</td>
+            <td>{task_text}{last_html}</td>
             <td style='color:#9993D0;'>{esc(t.get("project") or "No project")}</td>
             <td style='color:#9993D0;'>{court}</td>
             <td style='color:#9993D0;'>{reg.short_date(t["due_date"]) if t["due_date"] else "—"}</td>
             <td>{tier_html}</td>
-            <td>{action_btn}</td>
+            <td style='white-space:nowrap;'><a class='btn btn-log' href='{task_url}'><i class='ti ti-message-plus'></i> Update</a> {action_btn}</td>
         </tr>"""
 
         # Phone card for the same task
@@ -1055,10 +1120,12 @@ def home(filter: str = "open", project: int = 0, ball: str = "", added: int = 0,
                       f"<i class='ti ti-mail'></i></a>") if t.get("source_url") else ""
         if is_complete:
             buttons = f"""
-                <form method='post' action='/reopen/{t["id"]}'><button class='t-open'><i class='ti ti-rotate'></i> Reopen</button></form>"""
+                <form method='post' action='/reopen/{t["id"]}'><button class='t-open'><i class='ti ti-rotate'></i> Reopen</button></form>
+                <a class='t-log' href='{task_url}'><i class='ti ti-message-2'></i> Log</a>"""
         else:
             buttons = f"""
                 <form method='post' action='/complete/{t["id"]}'><button class='t-done'><i class='ti ti-check'></i> Done</button></form>
+                <a class='t-log' href='{task_url}'><i class='ti ti-message-plus'></i> Update</a>
                 <form method='post' action='/snooze/{t["id"]}'><button class='t-snooze'><i class='ti ti-clock-plus'></i> +3 days</button></form>"""
         tier_line = (f"<div class='t-tier' style='color:{color};'>{reg.TIER_LABELS[tier]}</div>"
                      if tier and tier < 5 else "")
@@ -1066,10 +1133,11 @@ def home(filter: str = "open", project: int = 0, ball: str = "", added: int = 0,
         cards_html += f"""
         <div class='tcard {"complete" if is_complete else ""}' style='border-left-color:{color};'>
             <div class='t-top'>
-                <div class='t-desc'>{esc(t["description"] or "")}{email_link}</div>
+                <div class='t-desc'><a class='task-link' href='{task_url}'>{esc(t["description"] or "")}</a>{email_link}</div>
                 <div class='t-id'>#{t["id"]}</div>
             </div>
             <div class='t-meta'>{" · ".join(meta)}{blocking}</div>
+            {last_html}
             {tier_line}
             <div class='t-actions'>{buttons}</div>
         </div>"""
@@ -1124,8 +1192,9 @@ def home(filter: str = "open", project: int = 0, ball: str = "", added: int = 0,
                 <div class='add-hint'>Blank due date = {reg.DEFAULT_DUE_DAYS} days out.</div>
             </details>"""
 
+    today_items = reg.get_register(limit=5)
     cc_html = command_center.render(
-        cc_data, reg.get_register(limit=5), link, selected_project=project,
+        cc_data, today_items, link, selected_project=project, latest=reg.latest_updates([t["id"] for t in today_items]),
         tier_colors=tier_colors, tier_labels=reg.TIER_LABELS, short_date=reg.short_date)
 
     return f"""
@@ -1134,6 +1203,7 @@ def home(filter: str = "open", project: int = 0, ball: str = "", added: int = 0,
     <body>
     <style>
         {command_center.CSS}
+        {task_log.CSS}
         .add-task {{ margin: 0 0 18px; }}
         .add-task summary {{
             list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;

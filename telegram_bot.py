@@ -79,6 +79,8 @@ HELP_TEXT = (
     "/task send Soundbath budget to Vishal Friday - something you owe\n"
     "/wait survey from Fortin, 71 NoBE, Tuesday - something you're waiting on\n"
     "/done 12 15 - close tasks\n"
+    "/update casa petrus doors, quote in, sent to Marc - log progress on a task. Or reply to any "
+    "message showing a task number, or start a voice note with \"update\"\n"
     "/list - master register, most urgent first; /list grotto - one project\n"
     "/waiting - everything you're waiting on\n"
     "/review - action items waiting for your OK\n"
@@ -551,7 +553,7 @@ def run_inbox_scan():
 # MEDIA
 # ============================================================
 
-def handle_voice(file_id: str, file_size: int, filename: str, target) -> None:
+def handle_voice(file_id: str, file_size: int, filename: str, target, reply_ids=None) -> None:
     from telegram_media import MediaError, download, transcribe
     _typing()
     try:
@@ -570,6 +572,11 @@ def handle_voice(file_id: str, file_size: int, filename: str, target) -> None:
         apply_linkedin_edit(target[1], transcript)
     elif target and target[0] == "email":
         apply_draft_answer(transcript)
+    elif reply_ids or transcript.lower().lstrip(" .,").startswith(("update", "progress update")):
+        import re
+        import register_telegram as regtg
+        note = re.sub(r"^\W*(progress\s+)?update\W*", "", transcript, flags=re.I) if not reply_ids else transcript
+        regtg.log_update(note, source="voice", candidates=reply_ids or None)
     else:
         run_agent(f"[Voice note]\n{transcript}")
 
@@ -684,6 +691,11 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
             _answer_callback(callback.get("id", ""), "Got it")
             from register_telegram import proposal_action
             background.add_task(proposal_action, action, ref, message)
+            return done
+        if action in ("upk", "upx", "uu"):
+            _answer_callback(callback.get("id", ""), "Got it")
+            from register_telegram import update_action
+            background.add_task(update_action, action, ref, message)
             return done
         if action in ("tu", "tp", "td", "tsn", "tch", "tko"):
             _answer_callback(callback.get("id", ""), "Got it")
@@ -825,7 +837,7 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
     if voice:
         background.add_task(
             handle_voice, voice.get("file_id"), voice.get("file_size") or 0,
-            voice.get("file_name"), edit_target(message),
+            voice.get("file_name"), edit_target(message), regtg.task_ids_in(message),
         )
         return done
 
@@ -862,6 +874,9 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
                          "Add the details, e.g. /wait survey from the surveyor, 71 NoBE, Tuesday")
             return done
         background.add_task(regtg.capture, rest, cmd == "wait")
+        return done
+    if cmd in ("update", "u", "progress") and text.startswith("/"):
+        background.add_task(regtg.log_update, rest_full, "telegram")
         return done
     if cmd == "done" and text.startswith("/"):
         background.add_task(regtg.done, rest)
@@ -1015,6 +1030,14 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
         pending = get_pending()
         if pending and pending.get("type") == "email_reply":
             background.add_task(apply_draft_answer, {"send": "SEND", "discard": "NO", "later": "LATER"}[cmd])
+            return done
+
+    # A reply to a message that shows task numbers (a capture, /list, the morning list)
+    # is a progress update on that task.
+    if not text.startswith("/"):
+        reply_ids = regtg.task_ids_in(message)
+        if reply_ids:
+            background.add_task(regtg.log_update, text, "telegram", reply_ids)
             return done
 
     # Everything else is a conversation with Rowan.

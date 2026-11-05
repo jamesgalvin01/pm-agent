@@ -12,6 +12,9 @@ Commands (wired in telegram_bot.py):
   /minutes Grotto   next text / voice note / PDF is that meeting's minutes
   /flags            pull flagged Outlook emails in now
   /morning          send this morning's exceptions list now
+  /update <words>   log progress on a task (Rowan finds the task from the words);
+                    also: reply to any message showing a task #, or a voice note
+                    that starts with "update"
 
 Buttons (callback data, all short):
   rk:<id> / rx:<id>   keep / drop one proposal
@@ -22,6 +25,9 @@ Buttons (callback data, all short):
   tsn:<id>            push due date 3 days
   tch:<id>            draft a chase email (goes through Rowan's confirm step)
   tko:<id>            keep a task open (after a reply on its thread went out)
+  upk:<task id>       which task a pending /update is for
+  upx                 cancel a pending /update
+  uu:<update id>      undo a logged update (and the change it made)
 """
 import time
 from datetime import timedelta
@@ -302,6 +308,192 @@ def task_action(action: str, ref: str, message: dict) -> None:
                   "otherwise write a new email, finding the address with lookup_person or search_email. "
                   "Propose it for my confirmation.")
         _tg().run_agent(prompt)
+
+
+# ============================================================
+# PROGRESS UPDATES  (/update, replies to a task, "update ..." voice notes)
+# ============================================================
+
+UPDATE_PENDING_SECONDS = 900
+UNDO_KEEP = 25
+
+UPDATE_SCHEMA = """{"task_ids": [<ids of the task(s) this is about, best match first, at most 3>],
+  "confident": true | false,
+  "note": "<what happened, in James's words, minus the task-identifying words and any instruction>",
+  "action": null | "waiting" | "mine" | "push" | "done",
+  "waiting_on": "<person/firm, only when action = waiting>",
+  "due_date": "YYYY-MM-DD, only when action = push and a date is stated or implied"}"""
+
+
+def parse_update(text: str, tasks: list) -> dict:
+    """Ask Claude which task a progress note is about, and whether it changes the task."""
+    from capture import _ask_json, _context_block
+    lines = "\n".join(
+        f"#{t['id']} [{t.get('project') or 'No project'}] {t['description']}"
+        + (f" (waiting on {t['waiting_on']})" if t.get("ball_in_court") == "waiting" and t.get("waiting_on") else "")
+        for t in tasks)
+    prompt = (f"{_context_block()}\n\nJames's open action items:\n{lines}\n\n"
+              f"James sent this progress update about one of them:\n\"{text}\"\n\n"
+              "Pick the task it is about. confident = true only when one task clearly fits; if two or more "
+              "fit about equally (e.g. several door tasks), list them and set confident = false.\n"
+              "action: 'waiting' when he now waits on someone (sent it to X, X will get back); 'mine' when the "
+              "ball came back to him; 'push' when he moves the date; 'done' only when he says it's finished "
+              "or closed. Otherwise null - most updates are just notes.\n"
+              f"Return ONLY one JSON object: {UPDATE_SCHEMA}")
+    try:
+        out = _ask_json(prompt, max_tokens=500)
+    except Exception as e:
+        print(f"[register_tg] parse_update failed: {e}")
+        out = None
+    if not isinstance(out, dict):
+        out = {}
+    valid = {t["id"] for t in tasks}
+    ids = []
+    for i in out.get("task_ids") or []:
+        try:
+            i = int(str(i).lstrip("#"))
+        except ValueError:
+            continue
+        if i in valid and i not in ids:
+            ids.append(i)
+    action = out.get("action") if out.get("action") in reg.UPDATE_ACTIONS else None
+    return {"task_ids": ids[:3], "confident": bool(out.get("confident")) and len(ids) >= 1,
+            "note": (out.get("note") or "").strip() or text.strip(), "action": action,
+            "waiting_on": out.get("waiting_on"), "due_date": out.get("due_date")}
+
+
+def _remember_undo(update: dict) -> None:
+    t = update["task"]
+    tg = _tg()
+    undo = tg.state_get("update_undo") or {}
+    undo[str(update["id"])] = {"task_id": t["id"], "action": update.get("action"),
+                               "ball_in_court": t.get("ball_in_court"), "waiting_on": t.get("waiting_on"),
+                               "due_date": t["due_date"].isoformat() if t.get("due_date") else None}
+    if len(undo) > UNDO_KEEP:
+        for k in sorted(undo, key=int)[:-UNDO_KEEP]:
+            undo.pop(k)
+    tg.state_set("update_undo", undo)
+
+
+def _save_and_confirm(task_id: int, parsed: dict, source: str) -> None:
+    up = reg.add_update(task_id, body=parsed.get("note") or "", source=source, action=parsed.get("action"),
+                        waiting_on=parsed.get("waiting_on"), due_date=parsed.get("due_date"))
+    if not up:
+        _send(f"Nothing to log on #{task_id}. Tell me what happened.")
+        return
+    _remember_undo(up)
+    t = up["task"]
+    lines = [f"Logged on #{t['id']}: {t['description']} ({t.get('project') or 'No project'})"]
+    if up.get("body"):
+        lines.append(f"\"{up['body']}\"")
+    if up.get("action") == "waiting":
+        lines.append(f"{up['action_detail']}. I'll flag it if nothing moves in {reg.STALE_WAITING_DAYS} days.")
+    elif up.get("action_detail"):
+        lines.append(up["action_detail"] + ".")
+    _send("\n".join(lines), {"inline_keyboard": [[{"text": "Undo", "callback_data": f"uu:{up['id']}"}]]})
+
+
+def log_update(text: str, source: str = "telegram", candidates=None) -> None:
+    """
+    Log a progress note from Telegram. candidates: task ids the message is tied to
+    (a reply to a message that showed them); None = search every open task.
+    """
+    import re
+    text = (text or "").strip()
+    if not text:
+        _send("What happened? e.g. /update casa petrus doors, quote received, sent to Marc")
+        return
+    _tg()._typing()
+
+    # "#3767 called Miguel" / "3767 called Miguel" names the task outright.
+    m = re.match(r"^#?(\d{2,6})\b[\s:,-]*(.*)$", text, re.S)
+    named = reg.get_task(int(m.group(1))) if m else None
+    if named and (named["status"] == "open" or candidates and named["id"] in candidates):
+        candidates, text = [named["id"]], m.group(2).strip() or text
+
+    if candidates:
+        tasks = [t for t in (reg.get_task(i) for i in candidates) if t]
+    else:
+        tasks = reg.get_register()
+    if not tasks:
+        _send("I couldn't find an open task for that. Check /list for the number.")
+        return
+
+    parsed = parse_update(text, tasks)
+    if len(tasks) == 1:
+        parsed["task_ids"], parsed["confident"] = [tasks[0]["id"]], True
+    if not parsed["task_ids"]:
+        _send("I couldn't tell which task that's about. Try /update #<number> <what happened>, "
+              "or reply to a message that shows the task.")
+        return
+    if parsed["confident"] and len(parsed["task_ids"]) == 1:
+        _save_and_confirm(parsed["task_ids"][0], parsed, source)
+        return
+
+    # Ambiguous: ask, and hold the note until he picks.
+    _tg().state_set("update_pending", {**parsed, "source": source, "until": time.time() + UPDATE_PENDING_SECONDS})
+    by_id = {t["id"]: t for t in tasks}
+    rows = [[{"text": f"#{i} {by_id[i]['description']}"[:60], "callback_data": f"upk:{i}"}]
+            for i in parsed["task_ids"] if i in by_id]
+    rows.append([{"text": "Cancel", "callback_data": "upx"}])
+    _send(f"Which task is this for?\n\"{parsed['note']}\"", {"inline_keyboard": rows})
+
+
+def update_action(action: str, ref: str, message: dict) -> None:
+    """Buttons: upk (pick task for a pending update), upx (cancel), uu (undo)."""
+    tg = _tg()
+    msg_id = message.get("message_id")
+    if action == "upx":
+        tg.state_set("update_pending", {})
+        _edit(msg_id, "Cancelled. Nothing logged.")
+        return
+    if action == "upk":
+        pending = tg.state_get("update_pending") or {}
+        if not pending or time.time() > float(pending.get("until", 0)):
+            _edit(msg_id, "That update expired. Send it again.")
+            return
+        tg.state_set("update_pending", {})
+        _edit(msg_id, f"Logging on #{ref}...")
+        _save_and_confirm(int(ref), pending, pending.get("source") or "telegram")
+        return
+    if action == "uu":
+        undo = tg.state_get("update_undo") or {}
+        prev = undo.pop(str(ref), None)
+        if not reg.delete_update(int(ref)):
+            _edit(msg_id, "That update was already removed.")
+            return
+        if prev:
+            tid = prev["task_id"]
+            if prev.get("action") == "done":
+                from db import get_connection
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute("UPDATE tasks SET status = 'open', completed_at = NULL WHERE id = %s", (tid,))
+                conn.commit()
+                cur.close()
+                conn.close()
+            elif prev.get("action") in ("waiting", "mine"):
+                reg.update_task(tid, ball_in_court=prev.get("ball_in_court") or "me", waiting_on=prev.get("waiting_on"))
+            elif prev.get("action") == "push" and prev.get("due_date"):
+                reg.update_task(tid, due_date=prev["due_date"])
+            tg.state_set("update_undo", undo)
+        _edit(msg_id, "Undone. The update was removed" + (" and the task put back as it was." if prev and prev.get("action") else "."))
+
+
+def task_ids_in(message: dict) -> list:
+    """Task numbers (#123) shown in the message being replied to."""
+    import re
+    replied = message.get("reply_to_message") or {}
+    text = (replied.get("text") or "") + " " + (replied.get("caption") or "")
+    if not (replied.get("from") or {}).get("is_bot"):
+        return []
+    # Only Rowan's task lines: "#12 [Project] ...", "Added #12: ...", "Logged on #12: ...", "Closed #12: ..."
+    pattern = r"(?:^|\n)\s*(?:Added |Logged on |Closed |Kept |Closed:\s*)?#(\d{2,6})(?=:| \[| )"
+    ids = []
+    for x in re.findall(pattern, text):
+        if int(x) not in ids and reg.get_task(int(x)):
+            ids.append(int(x))
+    return ids
 
 
 # ============================================================
