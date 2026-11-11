@@ -138,10 +138,10 @@ def render(data: dict, today_items: list, link, selected_project: int = 0, tier_
                 f"<div class='kpi-l'>{label}</div></a>")
 
     kpis = (kpi(charts.money_short(data["pipeline"]), f"Lead pipeline · {data['live_leads']} live", "/leads")
-            + kpi(data["open"], "Open action items", "/?filter=open#register")
-            + kpi(data["overdue"], "Overdue", "/?filter=open#register", "hot" if data["overdue"] else "")
-            + kpi(data["waiting"], "Waiting on others", "/?ball=waiting#register")
-            + kpi(data["closed_week"], "Closed this week", "/?filter=complete#register"))
+            + kpi(data["open"], "Open action items", "/tasks?filter=open#register")
+            + kpi(data["overdue"], "Overdue", "/tasks?filter=open#register", "hot" if data["overdue"] else "")
+            + kpi(data["waiting"], "Waiting on others", "/tasks?ball=waiting#register")
+            + kpi(data["closed_week"], "Closed this week", "/tasks?filter=complete#register"))
 
     rings = ""
     for p in data["projects"]:

@@ -154,6 +154,10 @@ TEMPLATE = r"""
 #sph .tools > *{pointer-events:auto}
 #sph .search{position:relative}
 #sph .chiprow{display:flex;flex-wrap:wrap;gap:6px}
+#sph #shapes{flex-basis:100%}
+#sph #shapes .chip{font-size:11.5px;padding:6px 13px}
+#sph #shapes .chip.on{background:#E6E3FF;color:#14113A}
+#sph .shapecap{flex-basis:100%;font-size:12px;color:#CBC7F0;max-width:620px;pointer-events:none;margin:-1px 0 2px 4px}
 #sph .search input{width:230px;background:rgba(12,10,38,.88);border:1px solid var(--line);border-radius:999px;color:var(--ink);padding:7px 12px;font:inherit;font-size:13px}
 #sph .search input:focus{outline:2px solid var(--accent);outline-offset:1px}
 #sph .results{position:absolute;top:38px;left:0;width:310px;max-width:calc(100vw - 40px);background:rgba(20,17,58,.97);border:1px solid var(--line);border-radius:10px;padding:4px;max-height:340px;overflow:auto;box-shadow:0 10px 30px rgba(0,0,0,.5)}
@@ -222,6 +226,8 @@ TEMPLATE = r"""
   #sph .chiprow{flex-wrap:nowrap;overflow-x:auto;width:100%;padding-bottom:2px;scrollbar-width:none}
   #sph .chiprow::-webkit-scrollbar{display:none}
   #sph .legend{font-size:9.5px;gap:4px 9px}
+  #sph .shapecap{font-size:11px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  #sph #shapes{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
   #sph .rail{overflow:visible}
 }
 </style>
@@ -240,6 +246,8 @@ TEMPLATE = r"""
       <canvas id="gl"></canvas>
       <div class="labels" id="labels"></div>
       <div class="tools">
+        <div class="chiprow" id="shapes" role="group" aria-label="Shape"></div>
+        <div class="shapecap" id="shapeCap"></div>
         <div class="search"><input id="q" type="search" placeholder="Find a task, person, project…" autocomplete="off" aria-label="Search the sphere"><div class="results" id="results" hidden role="listbox"></div></div>
         <div class="chiprow"><div id="chips" style="display:contents"></div>
         <button class="chip" id="spinBtn" aria-pressed="true">Pause spin</button>
@@ -339,9 +347,9 @@ DONE.forEach(([p,m,s,c]) => {
   const P = PROJECTS[p], base = HUBDIR["p"+p], spread = Math.min(.95, .16 + .022*Math.sqrt(doneBy[p]||1)), b = bright(m);
   srcCount[s]=(srcCount[s]||0)+c;
   for(let i=0;i<c;i++){
-    const n = addNode({pos:jitterDir(base,spread).multiplyScalar(R*(.95+rnd()*.05)), color:col(P.color), size:.9+rnd()*.5, alpha:.55*b, pulse:0, kind:"done"});
+    const n = addNode({pos:jitterDir(base,spread).multiplyScalar(R*(.95+rnd()*.05)), color:col(P.color), size:.9+rnd()*.5, alpha:.55*b, pulse:0, kind:"done", p, m});
     edges.push({a:n.pos, b:hubs["p"+p].pos, c:col(P.color), alpha:.045*b, tag:n});
-    if(hubs[s]) edges.push({a:n.pos, b:hubs[s].pos, c:col(P.color), alpha:.03*b, tag:n});
+    if(hubs[s]) edges.push({a:n.pos, b:hubs[s].pos, c:col(P.color), alpha:.03*b, tag:n, toSrc:true});
   }
 });
 const taskColor = t => t.overdue ? "#ff4d6d" : t.waiting ? "#fbbf24" : PROJECTS[t.p].color;
@@ -365,7 +373,7 @@ const peopleNodes = DATA.people.map(([name,emails,p]) => {
   const re = new RegExp("\\b"+first+"\\b","i");
   const mentions = first.length>2 ? tasks.filter(t => re.test(t.desc) || (t.wait && re.test(t.wait))) : [];
   const home = p ?? (mentions[0] ? mentions[0].p : (DATA.projects[0]||[0])[0]);
-  const n = addNode({pos:jitterDir(HUBDIR["p"+home]||HUBDIR.p0,.55).multiplyScalar(R*1.08), color:col("#f8fafc"), size:1.6+Math.min(2.2,emails/80), alpha:.95, pulse:0, pick:true, kind:"person", ref:{name,emails,p,mentions}});
+  const n = addNode({pos:jitterDir(HUBDIR["p"+home]||HUBDIR.p0,.55).multiplyScalar(R*1.08), color:col("#f8fafc"), size:1.6+Math.min(2.2,emails/80), alpha:.95, pulse:0, pick:true, kind:"person", home, ref:{name,emails,p,mentions}});
   if(p) edges.push({a:n.pos, b:hubs["p"+p].pos, c:col(PROJECTS[p].color), alpha:.35, tag:n});
   mentions.forEach(t => edges.push({a:n.pos, b:t.node.pos, c:col("#f8fafc"), alpha:.3, tag:t.node, open:true}));
   if(!p && !mentions.length) edges.push({a:n.pos, b:hubs.out.pos, c:col("#cbd5ff"), alpha:.12, tag:n});
@@ -393,9 +401,10 @@ const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
 renderer.setPixelRatio(Math.min(2, window.devicePixelRatio||1)); renderer.setClearColor(0x110e38, 1);
 const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(45,1,.1,200);
 let camDist = 34, fitted = false; const world = new THREE.Group(); scene.add(world);
-const SEG = 10, ctrl = V();
+const SEG = 10, ctrl = V(); let bow = 1, gain = 1;
 function curve(e, out, k){ // writes SEG line segments of the strand into out starting at k
-  ctrl.copy(e.a).add(e.b).multiplyScalar(.5).multiplyScalar(Math.max(.25, 1 - e.a.distanceTo(e.b)/(R*2.6)));
+  const f = Math.max(.25, 1 - e.a.distanceTo(e.b)/(R*2.6));
+  ctrl.copy(e.a).add(e.b).multiplyScalar(.5).multiplyScalar(1 + (f-1)*bow);
   for(let i=0;i<SEG;i++) for(const t of [i/SEG,(i+1)/SEG]){ const u=1-t;
     out[k]=u*u*e.a.x+2*u*t*ctrl.x+t*t*e.b.x; out[k+1]=u*u*e.a.y+2*u*t*ctrl.y+t*t*e.b.y; out[k+2]=u*u*e.a.z+2*u*t*ctrl.z+t*t*e.b.z; k+=3; }
   return k;
@@ -439,9 +448,7 @@ const pMat = new THREE.ShaderMaterial({
       gl_FragColor = vec4(c, max(a*vA, ring)); }`,
   transparent:true, depthWrite:false, blending:THREE.AdditiveBlending});
 world.add(new THREE.Points(pGeo, pMat));
-for(let lat=-60; lat<=60; lat+=30){ const r=R*Math.cos(lat*Math.PI/180), y=R*Math.sin(lat*Math.PI/180), pts=[];
-  for(let i=0;i<=96;i++){ const a=i/96*Math.PI*2; pts.push(V(Math.cos(a)*r,y,Math.sin(a)*r)); }
-  world.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({color:0x2a2470, transparent:true, opacity:.6}))); }
+
 
 // ---------- labels ----------
 const labelled = nodes.filter(n => n.label);
@@ -486,10 +493,11 @@ function nodeVisible(n){
 function applyFilter(){
   const on = filtering();
   nodes.forEach(n => { n.vis = nodeVisible(n); const i=n.i;
-    pAlpha[i] = baseAlpha[i] * (n.vis ? 1 : .07);
+    pAlpha[i] = baseAlpha[i] * (n.vis ? 1 : .07) * (shape!=="sphere" && n.kind==="done" ? .6 : 1);
     pSize[i] = baseSize[i] * (n.vis ? (on && n.kind==="task" ? 1.35 : 1) : .7); });
   pGeo.attributes.alpha.needsUpdate = true; pGeo.attributes.size.needsUpdate = true;
-  edges.forEach(e => { const f = !on ? 1 : (e.tag && e.tag.vis ? (e.open ? 1.7 : 1) : .035);
+  edges.forEach(e => { const doneF = shape==="sphere" || !e.tag || e.tag.kind!=="done" ? 1 : (e.toSrc ? .07 : .3);
+    const f = gain * doneF * (!on ? 1 : (e.tag && e.tag.vis ? (e.open ? 1.7 : 1) : .035));
     for(let j=0;j<SEG*6;j++) eCol[e.k+j] = Math.min(1, eBase[e.k+j]*f); });
   eGeo.attributes.color.needsUpdate = true;
   labelled.forEach(n => n.el.dataset.dim = n.vis ? "" : "1");
@@ -611,7 +619,7 @@ function showCard(n){ let h=""; const r=n.ref;
   } else if(n.kind==="project"){ const p=r, list=tasks.filter(t=>t.p===p).sort((a,b)=>(b.late??-999)-(a.late??-999));
     h=`<div class="k">Project</div><h3>${esc(PROJECTS[p].name)}</h3><dl><dt>Open</dt><dd>${openBy[p]||0}</dd><dt>Past due</dt><dd>${lateBy[p]||0}</dd><dt>Waiting on others</dt><dd>${list.filter(t=>t.waiting).length}</dd><dt>Completed</dt><dd>${(doneBy[p]||0).toLocaleString()}</dd></dl>`
       + (list.length?`<ul>${list.slice(0,6).map(t=>`<li>${esc(t.desc)} ${taskLink(t)} <span style="color:${t.overdue?"var(--crit)":"var(--muted)"}">· ${lateText(t)}</span></li>`).join("")}</ul>`:"")
-      + `<p style="margin:10px 0 0;display:flex;gap:8px;flex-wrap:wrap">${state.project===p?"":`<button class="chip on" data-iso="${p}">Show only this project</button>`}${p?`<a href="/?project=${p}#register" style="align-self:center">Open register →</a>`:""}</p>`;
+      + `<p style="margin:10px 0 0;display:flex;gap:8px;flex-wrap:wrap">${state.project===p?"":`<button class="chip on" data-iso="${p}">Show only this project</button>`}${p?`<a href="/tasks?project=${p}#register" style="align-self:center">Open register →</a>`:""}</p>`;
   } else if(n.kind==="source"){ const open = tasks.filter(t=>t.src===r).sort((a,b)=>(b.late??-999)-(a.late??-999));
     h=`<div class="k" style="color:${r==="out"?"var(--cyan)":"var(--warn)"}">Where tasks come from</div><h3>${esc(SOURCES[r].name)}</h3><p class="why">${esc(SOURCES[r].desc)}</p>
       <dl><dt>Items captured, all time</dt><dd>${(srcCount[r]||0).toLocaleString()}</dd><dt>Still open</dt><dd>${open.length}${open.filter(t=>t.overdue).length?` · <span style="color:var(--crit)">${open.filter(t=>t.overdue).length} past due</span>`:""}</dd></dl>`
@@ -691,24 +699,304 @@ document.querySelector("#sph .rail").addEventListener("click", e => { const b=e.
     if(b.dataset.lead) n=leadNodes[+b.dataset.lead];
     if(n){ if(filtering() && !n.vis){ state.filter="all"; state.project=null; applyFilter(); } select(n); } }
   if(window.innerWidth<=900) stage.scrollIntoView({behavior:"smooth"}); });
-function focusOn(n){ const d=n.pos.clone().normalize(); target={y:Math.atan2(-d.x,d.z), x:Math.asin(d.y)}; auto=false; }
+function focusOn(n){ const d=n.pos.clone(); if(d.lengthSq()<.01) return; d.normalize(); target={y:Math.atan2(-d.x,d.z), x: shape==='sphere' ? Math.asin(d.y) : SHAPES[shape].rotX}; auto=false; }
 $("legend").innerHTML = Object.keys(PROJECTS).filter(k=>k!=="0").map(k=>`<span><i style="background:${PROJECTS[k].color}"></i>${esc(PROJECTS[k].short)}</span>`).join("")
   + `<span><i style="background:#ff4d6d"></i>Past due</span><span><i style="background:#fbbf24"></i>Waiting on others / pending draft</span><span><i style="background:#67e8f9"></i>Unread email</span><span><i style="background:#f8fafc"></i>Contact</span>`;
+
+// ---------- shapes: every node gets a position in each layout; switching morphs between them ----------
+const TAU = Math.PI*2;
+const projOrder = Object.keys(PROJECTS).map(Number).sort((a,b)=>(a===0)-(b===0) || a-b);
+const NP = projOrder.length, projIx = {}; projOrder.forEach((p,i)=>projIx[p]=i);
+const srcKeys = Object.keys(SOURCES);
+const M = Math.max(1, months.length), mIdx = m => Math.max(0, months.indexOf(m));
+const maxDone = Math.max(1, ...Object.values(doneBy));
+const stackYaw = () => camera.aspect < 1 ? -.8 : 0;   // phones look down the row of buildings
+const SHAPES = {
+  sphere:{name:"Sphere", cam:34, rotX:.25, bow:1, gain:1, cap:"Every task linked to its project and to where it came from. Bright = open, dim = completed."},
+  orbit:{name:"Orbit", cam:46, rotX:.95, bow:0, gain:.9, cap:"Rings are due windows around today: the closer to the center, the more overdue. Each wedge is a project."},
+  galaxy:{name:"Galaxy", cam:48, rotX:.8, bow:0, gain:.85, cap:"One spiral arm per project. Open work glows near the core; completed history trails outward by month."},
+  torus:{name:"Torus", cam:42, rotX:.62, bow:0, gain:.85, cap:"Projects sit around the ring; inside each section time runs from oldest to newest. Thin sections are quiet projects."},
+  helix:{name:"Helix", cam:50, rotX:.12, bow:0, gain:.8, cap:"Height is time: May at the bottom, open work at the top. One strand per project; capture sources run up the core."},
+  network:{name:"Network", cam:52, rotX:1.2, bow:0, gain:.9, cap:"Flat map of projects, the parties you're waiting on, contacts and sources. Easiest to read on a phone."},
+  skyline:{name:"Skyline", cam:46, rotX:.55, bow:0, gain:.45, cap:"Each project is a city block. Tower height = days since the task last moved; red tops are past due."}};
+let shape = "sphere";
+const g3 = () => (rnd()+rnd()+rnd()-1.5)/1.5;
+const polar = (r,a,y=0) => [Math.cos(a)*r, y, Math.sin(a)*r];
+const LAY = {};
+nodes.forEach(n => n.home0 = n.pos.clone());
+function buildLayout(name, place){
+  seed = 11 + Object.keys(LAY).length*97;
+  const out = new Float32Array(N*3);
+  const put = (n,p) => out.set(p, n.i*3);
+  const get = n => [out[n.i*3], out[n.i*3+1], out[n.i*3+2]];
+  // first pass: everything that doesn't depend on other nodes
+  nodes.forEach(n => { if(n.kind!=="waiting" && n.kind!=="unread") put(n, place(n)); });
+  // second pass: waiting-on parties float above their tasks, unread mail swarms around Outlook
+  partyNodes.forEach(n => { const c=[0,0,0]; n.ref.list.forEach(t=>{ const q=get(t.node); c[0]+=q[0]; c[1]+=q[1]; c[2]+=q[2]; });
+    const L=n.ref.list.length; const v=V(c[0]/L,c[1]/L,c[2]/L); const lift = place.lift ? place.lift(v) : v.clone().normalize().multiplyScalar(1.4);
+    put(n, [v.x+lift.x, v.y+lift.y, v.z+lift.z]); });
+  const o = V(...get(hubs.out));
+  nodes.forEach(n => { if(n.kind==="unread") put(n, [o.x+g3()*1.3, o.y+g3()*1.3, o.z+g3()*1.3]); });
+  LAY[name] = out;
+}
+buildLayout("sphere", n => [n.home0.x, n.home0.y, n.home0.z]);
+
+// ORBIT: rings = due window, wedge = project
+(function(){ const W = TAU/NP;
+  const ring = t => t.late===null ? 12.6 : t.late>0 ? 2.2 + 3*(1-Math.min(t.late,14)/14) : t.late>=-7 ? 6.2 + (-t.late)/7*1.2 : t.late>=-14 ? 8.4 + (-t.late-7)/7*1 : 10.3 + rnd()*.9;
+  const f = n => { const k=n.kind;
+    if(k==="task"){ const t=n.ref; return polar(ring(t), projIx[t.p]*W + (rnd()-.5)*W*.8, g3()*.15); }
+    if(k==="done") return polar(14.4 + (1-(mIdx(n.m)+1)/M)*5 + rnd()*.8, projIx[n.p]*W + (rnd()-.5)*W*.85, g3()*.3);
+    if(k==="project") return polar(13.6, projIx[n.ref]*W, .4);
+    if(k==="source") return polar(22, srcKeys.indexOf(n.ref)/srcKeys.length*TAU + W/2, 0);
+    if(k==="pipeline") return [0,5.5,0];
+    if(k==="lead") return polar(1.6, rnd()*TAU, 5.5+g3()*.4);
+    if(k==="person") return polar(16+rnd()*2.5, projIx[n.home]*W + (rnd()-.5)*W*.7, 1.6+rnd());
+    if(k==="mail") return polar(24+rnd()*3, rnd()*TAU, g3()*.6);
+    return [0,0,0]; };
+  f.lift = v => V(0,.9,0).add(v.clone().setY(0).normalize().multiplyScalar(.8));
+  buildLayout("orbit", f); })();
+
+// GALAXY: one spiral arm per project, open work near the core
+(function(){ const arm = (p, s, spread, ylift=0) => { const a0 = projIx[p]/NP*TAU, r = 1.4 + s*15, a = a0 + s*2.6 + g3()*spread*(.12+s*.22);
+    return polar(r, a, g3()*.5*(1-s*.6) + ylift); };
+  const f = n => { const k=n.kind;
+    if(k==="task") return arm(n.ref.p, n.ref.overdue ? .04+rnd()*.08 : .1+rnd()*.14, .9);
+    if(k==="done") return arm(n.p, .3 + (1-(mIdx(n.m)+1)/M)*.55 + rnd()*.1, 1.1);
+    if(k==="project"){ const a0=projIx[n.ref]/NP*TAU, s=.17; return polar(1.4+s*15, a0+s*2.6, .5); }
+    if(k==="source") return polar(20, srcKeys.indexOf(n.ref)/srcKeys.length*TAU, 0);
+    if(k==="pipeline") return [15,5,-15];
+    if(k==="lead") return [15+g3()*1.6, 5+g3()*.6, -15+g3()*1.6];
+    if(k==="person") return arm(n.home, .42+rnd()*.12, 1.4, .9);
+    if(k==="mail"){ const r=2+rnd()*17; return polar(r, rnd()*TAU, g3()*.3); }
+    return [0,0,0]; };
+  f.lift = v => V(0,1,0);
+  buildLayout("galaxy", f); })();
+
+// TORUS: projects around the ring, time runs through each section
+(function(){ const RM=10, rm=3.2, W=TAU/NP*.86;
+  const tp = (th, ph, rr) => [(RM+rr*Math.cos(ph))*Math.cos(th), rr*Math.sin(ph), (RM+rr*Math.cos(ph))*Math.sin(th)];
+  const th0 = p => projIx[p]/NP*TAU;
+  const f = n => { const k=n.kind;
+    if(k==="done") return tp(th0(n.p) - W/2 + (mIdx(n.m)+rnd())/M*W*.82, rnd()*TAU, rm*(.96+rnd()*.06));
+    if(k==="task") return tp(th0(n.ref.p) + W/2 - rnd()*W*.2, g3()*.55, rm*1.1);
+    if(k==="project") return tp(th0(n.ref), Math.PI/2, rm*1.25);
+    if(k==="source") return polar(4.4, srcKeys.indexOf(n.ref)/srcKeys.length*TAU, 0);
+    if(k==="pipeline") return [0,6.5,0];
+    if(k==="lead") return polar(1.5, rnd()*TAU, 6.5+g3()*.4);
+    if(k==="person") return tp(th0(n.home)+(rnd()-.5)*W, -Math.PI/2+g3()*.5, rm*1.55);
+    if(k==="mail") return polar(16.5+rnd()*3, rnd()*TAU, g3()*1.2);
+    return [0,0,0]; };
+  f.lift = v => v.clone().setY(0).normalize().multiplyScalar(1.6).add(V(0,.6,0));
+  buildLayout("torus", f); })();
+
+// HELIX: height = time, one strand per project
+const helixY = mi => -12 + mi/Math.max(1,M-1)*19;
+(function(){ const strand = (p, y, r=8, j=.25) => polar(r + g3()*.6, y*.42 + projIx[p]/NP*TAU + g3()*j, y);
+  const f = n => { const k=n.kind;
+    if(k==="done") return strand(n.p, helixY(mIdx(n.m)) + rnd()*(19/Math.max(1,M-1)));
+    if(k==="task") return strand(n.ref.p, 10 + rnd()*3.2 + (n.ref.overdue?.6:0), 8.2, .18);
+    if(k==="project") return strand(n.ref, 15, 8.6, 0);
+    if(k==="source") return polar(.9, srcKeys.indexOf(n.ref)*1.9, -11 + srcKeys.indexOf(n.ref)*3.2);
+    if(k==="pipeline") return [0,18.5,0];
+    if(k==="lead") return polar(1.6, rnd()*TAU, 18.5+g3()*.5);
+    if(k==="person") return strand(n.home, 8 + rnd()*5, 11.5, .5);
+    if(k==="mail") return polar(14+rnd()*1.6, rnd()*TAU, -13 + rnd()*30);
+    return [0,0,0]; };
+  f.lift = v => v.clone().setY(0).normalize().multiplyScalar(1.6).add(V(0,.4,0));
+  buildLayout("helix", f); })();
+
+// NETWORK: flat constellation
+(function(){ const hub = p => polar(9.5, projIx[p]/NP*TAU - Math.PI/2);
+  const around = (p, r, y=0) => { const h=hub(p), a=rnd()*TAU; return [h[0]+Math.cos(a)*r, y, h[2]+Math.sin(a)*r]; };
+  const f = n => { const k=n.kind;
+    if(k==="project") return hub(n.ref);
+    if(k==="task") return around(n.ref.p, 1.3 + rnd()*1.9, .05);
+    if(k==="done") return around(n.p, 1.4 + Math.sqrt(rnd())*(1.4 + 3.4*Math.sqrt((doneBy[n.p]||1)/maxDone)), -.05);
+    if(k==="source") return polar(18, srcKeys.indexOf(n.ref)/srcKeys.length*TAU + Math.PI/8, 0);
+    if(k==="pipeline") return [0,0,0];
+    if(k==="lead") return polar(1.8, rnd()*TAU, 0);
+    if(k==="person"){ const h=hub(n.home), a=Math.atan2(h[2],h[0]) + g3()*.5, r=14 + rnd()*2; return polar(r, a, 0); }
+    if(k==="mail") return polar(21+rnd()*3, rnd()*TAU, -.2);
+    return [0,0,0]; };
+  f.lift = v => v.clone().setY(0).normalize().multiplyScalar(1.8);
+  buildLayout("network", f); })();
+
+// SKYLINE: project blocks; tower height = days since last movement
+const BLOCK = {}; (function(){ const cols = Math.ceil(Math.sqrt(NP+1)), sp = 9.5;
+  [...projOrder, "lead"].forEach((p,i) => { BLOCK[p] = [(i%cols - (cols-1)/2)*sp, (Math.floor(i/cols) - (Math.ceil((NP+1)/cols)-1)/2)*sp]; }); })();
+const towerSlot = {}; projOrder.forEach(p => { const list = tasks.filter(t=>t.p===p); const c = Math.ceil(Math.sqrt(list.length||1)), step = Math.min(1.4, 6/c);
+  list.forEach((t,j) => towerSlot[t.id] = [((j%c)-(c-1)/2)*step, (Math.floor(j/c)-(c-1)/2)*step]); });
+const towerH = t => .6 + Math.min(t.idle ?? 0, 30)*.32;
+(function(){ const f = n => { const k=n.kind;
+    if(k==="task"){ const b=BLOCK[n.ref.p], s=towerSlot[n.ref.id]; return [b[0]+s[0], towerH(n.ref), b[1]+s[1]]; }
+    if(k==="done"){ const b=BLOCK[n.p]; return [b[0]+(rnd()-.5)*6.6, .02, b[1]+(rnd()-.5)*6.6]; }
+    if(k==="project"){ const b=BLOCK[n.ref]; return [b[0]-3.6, .3, b[1]+3.9]; }
+    if(k==="source") return polar(23, srcKeys.indexOf(n.ref)/srcKeys.length*TAU, 0);
+    if(k==="pipeline"){ const b=BLOCK.lead; return [b[0]-3.6, .3, b[1]+3.9]; }
+    if(k==="lead"){ const b=BLOCK.lead, j=leadNodes.indexOf(n); return [b[0]+(j%3-1)*1.8, .6 + n.ref.val/30000, b[1]+(Math.floor(j/3)-.5)*1.8]; }
+    if(k==="person"){ const b=BLOCK[n.home], a=rnd()*TAU; return [b[0]+Math.cos(a)*5.2, .2, b[1]+Math.sin(a)*5.2]; }
+    if(k==="mail") return [(rnd()-.5)*50, -.8, (rnd()-.5)*50];
+    return [0,0,0]; };
+  f.lift = () => V(0,2,0);
+  buildLayout("skyline", f); })();
+
+// guides drawn for each shape (rings, month marks, city blocks, tower stems)
+const guideGroups = {}, guideLabels = [];
+const gmat = c => new THREE.LineBasicMaterial({color:c, transparent:true, opacity:0, depthWrite:false});
+const circle = (r, y=0, seg=128) => { const p=[]; for(let i=0;i<=seg;i++){ const a=i/seg*TAU; p.push(V(Math.cos(a)*r,y,Math.sin(a)*r)); } return p; };
+function guide(shapeKey, pts, color, segments){ const grp = guideGroups[shapeKey] ||= new THREE.Group(); world.add(grp);
+  const geo = new THREE.BufferGeometry().setFromPoints(pts); grp.add(segments ? new THREE.LineSegments(geo, gmat(color)) : new THREE.Line(geo, gmat(color))); }
+const glabel = (shapeKey, text, v, color) => { const el=document.createElement("div"); el.className="lab"; el.textContent=text; el.style.color=color||"#9993D0"; el.style.fontSize="9.5px"; el.style.opacity=0; $("labels").appendChild(el); guideLabels.push({shape:shapeKey, el, v}); };
+for(let lat=-60; lat<=60; lat+=30){ const r=R*Math.cos(lat*Math.PI/180), y=R*Math.sin(lat*Math.PI/180); guide("sphere", circle(r,y,96), 0x2a2470); }
+[[5.3,"PAST DUE","#ff4d6d",3.4],[7.5,"NEXT 7 DAYS","#fbbf24",6.8],[9.5,"8–14 DAYS","#9993D0",8.9],[11.4,"LATER","#9993D0",10.8]].forEach(([r,txt,c,lr]) => { guide("orbit", circle(r), r<6?0xa0304f:0x5a4fc0); glabel("orbit", txt, V(0,0,-lr), c); });
+glabel("orbit", "TODAY", V(0,.3,0), "#E6E3FF"); glabel("orbit", "NO DUE DATE", V(0,0,-12.6));
+[6,10,14,18].forEach(r => guide("galaxy", circle(r,0,128), 0x221d5c));
+guide("torus", circle(10), 0x2a2470); guide("torus", circle(13.2), 0x221d5c); guide("torus", circle(6.8), 0x221d5c);
+months.forEach((m,i) => { const y=helixY(i); guide("helix", circle(10.6, y, 96), 0x221d5c); glabel("helix", MON[+m.slice(2)-1].toUpperCase(), V(-11.2, y, 0)); });
+glabel("helix", "OPEN NOW", V(-11.2, 11.6, 0), "#E6E3FF"); guide("helix", [V(0,-13,0), V(0,19,0)], 0x352F78);
+projOrder.forEach(p => guide("network", circle(1.1, 0, 48).map(v => v.add(V(...polar(9.5, projIx[p]/NP*TAU - Math.PI/2)))), 0x352F78));
+guide("network", circle(9.5), 0x1d1850);
+Object.values(BLOCK).forEach(([x,z]) => { const h=3.6; guide("skyline", [V(x-h,0,z-h),V(x+h,0,z-h),V(x+h,0,z+h),V(x-h,0,z+h),V(x-h,0,z-h)], 0x5a4fc0); });
+guide("skyline", tasks.flatMap(t => { const b=BLOCK[t.p], s=towerSlot[t.id]; return [V(b[0]+s[0],0,b[1]+s[1]), V(b[0]+s[0],towerH(t),b[1]+s[1])]; }), 0xb3a8ff, true);
+glabel("skyline", "TOWER HEIGHT = DAYS SINCE LAST MOVEMENT", V(0,-.5, Math.max(...Object.values(BLOCK).map(b=>b[1]))+6), "#9993D0");
+// STACKING PLAN: one building per project, one floor per open task (soonest due at the bottom),
+// colored like a leasing stacking plan; cranes mark who you're waiting on.
+const STACK = (function(){
+  const FLOOR = .78, SLAB = .62, BW = 3.6, BD = 3, SP = 6.4;
+  const floorColor = t => t.overdue ? "#ff4d6d" : t.waiting ? "#fbbf24" : (t.late!==null && t.late>=-7) ? "#B45CF0" : "#5b6399";
+  const order = projOrder.slice().sort((a,b)=>(openBy[b]||0)-(openBy[a]||0) || (doneBy[b]||0)-(doneBy[a]||0));
+  const cols = [...order, "lead"], x0 = -(cols.length-1)/2*SP;
+  const B = {}; cols.forEach((p,i) => { const done = p==="lead" ? 0 : (doneBy[p]||0);
+    B[p] = {x:x0+i*SP, pod: p==="lead" ? .3 : .35 + Math.log10(done+1)*.75, floors:[]}; });
+  const byDue = (a,b) => (a.due||"9999") < (b.due||"9999") ? -1 : (a.due||"9999") > (b.due||"9999") ? 1 : 0;
+  order.forEach(p => tasks.filter(t=>t.p===p).sort(byDue).forEach((t,j) => { t.floor = j; B[p].floors.push(t); }));
+  leadNodes.forEach((n,j) => B.lead.floors.push(n));
+  const floorY = (p,j) => B[p].pod + j*FLOOR + FLOOR/2;
+  const top = p => B[p].pod + B[p].floors.length*FLOOR;
+  // cranes: one per party per building
+  const cranes = []; const corner = [[2.4,-1.9],[-2.4,-1.9],[2.4,1.9],[-2.4,1.9]];
+  order.forEach(p => { const parties = [...new Set(B[p].floors.filter(t=>t.waiting).map(t=>t.party))];
+    parties.forEach((party,k) => { const list = B[p].floors.filter(t=>t.party===party), idle = Math.max(...list.map(t=>t.idle??0));
+      cranes.push({p, party, list, idle, c:corner[k%4], k}); }); });
+  const offices = {}; let oi = 0;
+  partyNodes.forEach(n => { const p = n.ref.list[0].p; const sameB = partyNodes.filter(m=>m.ref.list[0].p===p); const k = sameB.indexOf(n);
+    offices[n.i] = [B[p].x + (k-(sameB.length-1)/2)*1.7, .45, 6.2]; oi++; });
+  return {B, cols, floorY, top, floorColor, cranes, offices, BW, BD, SLAB, FLOOR};
+})();
+SHAPES.stack = {name:"Stacking plan", cam:62, rotX:.22, lookY:4.2, bow:0, gain:.07, cap:"Each building is a project; each floor an open task, soonest due at the bottom. Red = past due, amber = waiting on someone, purple = due in 7 days, gray = later. The ghosted podium is completed work. Cranes mark who you're waiting on: amber after 5 days without movement, red after 10."};
+(function(){ const S = STACK;
+  const f = n => { const k=n.kind;
+    if(k==="task"){ const b=S.B[n.ref.p]; return [b.x, S.floorY(n.ref.p, n.ref.floor), S.BD/2+.05]; }
+    if(k==="done"){ const b=S.B[n.p]; return [b.x+(rnd()-.5)*S.BW*.9, rnd()*b.pod*.95, (rnd()-.5)*S.BD*.9]; }
+    if(k==="project"){ const b=S.B[n.ref]; return [b.x, S.top(n.ref)+.5, 0]; }
+    if(k==="pipeline") return [S.B.lead.x, S.top("lead")+.5, 0];
+    if(k==="lead"){ const j=S.B.lead.floors.indexOf(n); return [S.B.lead.x, S.floorY("lead", j), S.BD/2+.05]; }
+    if(k==="source") return [(srcKeys.indexOf(n.ref)-(srcKeys.length-1)/2)*6, .3, -9];
+    if(k==="person"){ const b=S.B[n.home]||S.B[0]; return [b.x+(rnd()-.5)*4, .15, -5-rnd()*2]; }
+    if(k==="mail") return [(rnd()-.5)*70, -.6, (rnd()-.5)*34];
+    return [0,0,0]; };
+  f.lift = () => V(0,0,0);
+  buildLayout("stack", f);
+  // offices replace the averaged position for waiting-on parties
+  partyNodes.forEach(n => LAY.stack.set(S.offices[n.i], n.i*3));
+  const o = LAY.stack.slice(hubs.out.i*3, hubs.out.i*3+3);
+  nodes.forEach(n => { if(n.kind==="unread") LAY.stack.set([o[0]+g3()*1.2, o[1]+.8+Math.abs(g3())*1.2, o[2]+g3()*1.2], n.i*3); });
+})();
+(function(){ const S = STACK, grp = guideGroups.stack = new THREE.Group(); world.add(grp);
+  const add = (obj, op) => { obj.userData.op = op; grp.add(obj); return obj; };
+  const slabGeo = new THREE.BoxGeometry(S.BW, S.SLAB, S.BD), slabEdges = new THREE.EdgesGeometry(slabGeo);
+  const mat = (c, op, lines) => lines ? new THREE.LineBasicMaterial({color:c, transparent:true, opacity:0, depthWrite:false}) : new THREE.MeshBasicMaterial({color:c, transparent:true, opacity:0, depthWrite:false});
+  S.cols.forEach(p => { const b = S.B[p];
+    // podium of completed work (ghosted)
+    const pg = new THREE.BoxGeometry(S.BW+.5, b.pod, S.BD+.5);
+    const pm = add(new THREE.Mesh(pg, mat(p==="lead"?"#fbbf24":PROJECTS[p].color)), .07); pm.position.set(b.x, b.pod/2, 0);
+    const pe = add(new THREE.LineSegments(new THREE.EdgesGeometry(pg), mat(p==="lead"?"#fbbf24":PROJECTS[p].color, 0, true)), .45); pe.position.copy(pm.position);
+    // floors
+    b.floors.forEach((t,j) => { const c = p==="lead" ? (t.ref.status==="Won"?"#4ade80":"#fbbf24") : S.floorColor(t);
+      const m = add(new THREE.Mesh(slabGeo, mat(c)), .5); m.position.set(b.x, S.floorY(p,j), 0);
+      const e = add(new THREE.LineSegments(slabEdges, mat(c,0,true)), .95); e.position.copy(m.position); });
+    // ground pad
+    const pad = add(new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.PlaneGeometry(S.BW+2, S.BD+2).rotateX(-Math.PI/2)), mat("#352F78",0,true)), .8); pad.position.set(b.x, 0, 0);
+  });
+  // cranes
+  S.cranes.forEach(cr => { const b = S.B[cr.p], color = cr.idle>=10 ? "#ff4d6d" : cr.idle>=STALE_DAYS ? "#fbbf24" : "#CBC7F0";
+    const mx = b.x+cr.c[0], mz = cr.c[1], h = S.top(cr.p) + 1.6 + cr.k*.45;
+    const jibEnd = V(b.x - cr.c[0]*.35, h, mz*.4), counter = V(mx + Math.sign(cr.c[0])*1.1, h, mz);
+    const pts = [V(mx,0,mz), V(mx,h+.7,mz),  V(mx,h,mz), jibEnd,  V(mx,h+.7,mz), jibEnd,  V(mx,h,mz), counter,  V(mx,h+.7,mz), counter];
+    cr.list.forEach(t => { const y = S.floorY(cr.p, t.floor) + S.SLAB/2; const hx = b.x + (jibEnd.x-b.x)*.6, hz = mz*.25; pts.push(V(hx,h,hz), V(hx,y,hz)); });
+    add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), mat(color,0,true)), 1);
+    const off = S.offices[cr.party.i];
+    add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints([V(mx,h+.7,mz), V(off[0], off[1]+.4, off[2])]), mat(color,0,true)), .35);
+    // counterweight block
+    const cw = add(new THREE.Mesh(new THREE.BoxGeometry(.5,.4,.5), mat(color)), .8); cw.position.copy(counter).add(V(0,-.2,0));
+  });
+  // site offices for the parties you're waiting on
+  partyNodes.forEach(n => { const o = S.offices[n.i];
+    const m = add(new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.1,.8,.8)), mat("#fbbf24",0,true)), .9); m.position.set(o[0], o[1], o[2]); });
+  // ground line
+  const w = (S.cols.length)*6.4/2 + 4;
+  add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints([V(-w,0,3.4),V(w,0,3.4), V(-w,0,-3.4),V(w,0,-3.4)]), mat("#2a2470",0,true)), .8);
+})();
+glabel("stack", "FLOORS: SOONEST DUE AT BOTTOM  ·  PODIUM = COMPLETED WORK", V(0, -.6, 4.6), "#9993D0");
+glabel("stack", "SITE OFFICES = WHO YOU'RE WAITING ON", V(0, -.6, 8.4), "#fbbf24");
+
+let morph = {t:1, from:null, to:LAY.sphere, bowFrom:1, bowTo:1, gainFrom:1};
+let camGoal = null, lookY = 0, stackInit = false;
+function setShape(name){
+  if(name===shape && morph.t>=1) return;
+  morph = {t:0, from:pPos.slice(), to:LAY[name], bowFrom:bow, bowTo:SHAPES[name].bow, gainFrom:gain, gainTo:SHAPES[name].gain, prev:shape};
+  shape = name; camGoal = SHAPES[name].cam * (camera.aspect<1 ? (name==="stack" ? 1.15 : Math.min(1.7, .92/camera.aspect)) : 1);
+  target = {y: name==="stack" ? stackYaw() : rotY, x:SHAPES[name].rotX};
+  renderShapes(); $("shapeCap").textContent = SHAPES[name].cap;
+}
+function stepMorph(dt){
+  if(morph.t>=1) return false;
+  morph.t = Math.min(1, morph.t + dt/1.5); const e = morph.t<.5 ? 4*morph.t**3 : 1-(-2*morph.t+2)**3/2;
+  for(let i=0;i<N*3;i++) pPos[i] = morph.from[i] + (morph.to[i]-morph.from[i])*e;
+  nodes.forEach(n => n.pos.set(pPos[n.i*3], pPos[n.i*3+1], pPos[n.i*3+2]));
+  pGeo.attributes.position.needsUpdate = true; pGeo.computeBoundingSphere();
+  bow = morph.bowFrom + (morph.bowTo-morph.bowFrom)*e; gain = morph.gainFrom + (morph.gainTo-morph.gainFrom)*e;
+  let k=0; edges.forEach(ed => { k = curve(ed, ePos, k); }); eGeo.attributes.position.needsUpdate = true; eGeo.computeBoundingSphere();
+  if(morph.t>=1 || Math.round(morph.t*20)%5===0) applyFilter();
+  if(selected) highlight(selected);
+  return true;
+}
+function renderShapes(){ $("shapes").innerHTML = Object.entries(SHAPES).map(([k,s]) => `<button class="chip ${k===shape?"on":""}" data-shape="${k}" aria-pressed="${k===shape}">${s.name}</button>`).join(""); }
+$("shapes").addEventListener("click", e => { const b=e.target.closest("[data-shape]"); if(b) setShape(b.dataset.shape); });
+renderShapes();
+
+// open in the Stacking plan every time (other shapes are one tap away)
+(function(){ const S = "stack";
+  pPos.set(LAY[S]); nodes.forEach(n => n.pos.set(pPos[n.i*3], pPos[n.i*3+1], pPos[n.i*3+2])); pGeo.attributes.position.needsUpdate = true;
+  shape = S; bow = SHAPES[S].bow; gain = SHAPES[S].gain; rotX = SHAPES[S].rotX; rotY = 0; stackInit = true; lookY = SHAPES[S].lookY||0;
+  morph = {t:1, from:null, to:LAY[S], bowFrom:bow, bowTo:bow, gainFrom:gain, gainTo:gain, prev:null};
+  let k=0; edges.forEach(ed => { k = curve(ed, ePos, k); }); eGeo.attributes.position.needsUpdate = true;
+  renderShapes(); $("shapeCap").textContent = SHAPES[S].cap; })();
 
 // ---------- loop ----------
 function resize(){ const r=stage.getBoundingClientRect(); renderer.setSize(r.width,r.height,false); camera.aspect=r.width/r.height; camera.updateProjectionMatrix();
   pMat.uniforms.uScale.value=Math.max(.7,Math.min(1.25,Math.min(r.height,r.width*1.3)/650));
-  if(!fitted && r.width>0){ camDist = camera.aspect<1 ? Math.min(60, 31/camera.aspect) : 34; fitted = true; } }
+  if(!fitted && r.width>0){ camDist = SHAPES[shape].cam * (camera.aspect<1 ? (shape==="stack" ? 1.15 : Math.min(1.7, .92/camera.aspect)) : 1); if(shape==="stack") rotY = stackYaw(); fitted = true; } }
 new ResizeObserver(resize).observe(stage); resize();
 applyFilter();
 const clock = new THREE.Clock();
-function frame(){ const t=clock.getElapsedTime();
+let lastT = performance.now();
+function frame(){ const t=clock.getElapsedTime(), now=performance.now(), dt=Math.min(.05,(now-lastT)/1000); lastT=now;
+  stepMorph(dt);
+  lookY += ((SHAPES[shape].lookY||0) - lookY)*.06;
+  if(camGoal!==null){ camDist += (camGoal-camDist)*.06; if(Math.abs(camGoal-camDist)<.05) camGoal=null; }
+  Object.entries(guideGroups).forEach(([key,grp]) => { const o = key===shape ? morph.t : key===morph.prev ? 1-morph.t : 0;
+    grp.visible = o>0.01; grp.children.forEach(c => c.material.opacity = o*(c.userData.op ?? (key==="skyline"||key==="orbit"?.85:.6))); });
   if(state.spin && !dragging && !auto && !target && !hover && performance.now()-idle>6000 && $("card").hidden) auto=true;
-  if(auto && !hover) rotY+=.0016;
+  if(auto && !hover){ if(shape==="stack") rotY += (stackYaw() + 0.38*Math.sin(t*.12) - rotY)*.02; else rotY+=.0016; }
   if(target){ const wrap=a=>Math.atan2(Math.sin(a),Math.cos(a)), dy=wrap(target.y-rotY); rotY+=dy*.08; rotX+=(target.x-rotX)*.08; if(Math.abs(dy)<.002&&Math.abs(target.x-rotX)<.002) target=null; }
-  world.rotation.set(rotX,rotY,0,"XYZ"); camera.position.set(0,0,camDist); camera.lookAt(0,0,0);
+  world.rotation.set(rotX,rotY,0,"XYZ"); camera.position.set(0,lookY,camDist); camera.lookAt(0,lookY,0);
   pMat.uniforms.uTime.value = reduceMotion?0:t; world.updateMatrixWorld();
   const rect = canvas.getBoundingClientRect();
+  guideLabels.forEach(gl => { const o = gl.shape===shape ? morph.t : 0; if(o<.02){ gl.el.style.opacity=0; return; }
+    wp.copy(gl.v).applyMatrix4(world.matrixWorld); const z=wp.z; wp.project(camera);
+    gl.el.style.left=((wp.x+1)/2*rect.width)+"px"; gl.el.style.top=((1-wp.y)/2*rect.height)+"px"; gl.el.style.opacity = (z>-4?1:.35)*o; });
   labelled.forEach(n => { const s=screenOf(n,rect); n.el.style.left=s.x+"px"; n.el.style.top=s.y+"px";
     n.el.style.opacity = n.el.dataset.dim ? .1 : s.z>-2 ? (n.kind==="waiting"?.9:1) : .15; });
   const shown = [];

@@ -257,8 +257,8 @@ def header_html(email: str, active: str) -> str:
                 <span class='sub'>Miami Coastline</span>
             </div>
             <nav>
-                <a href='/' class='{cls("dashboard")}'>Dashboard</a>
-                <a href='/sphere' class='{cls("sphere")}'>Sphere</a>
+                <a href='/' class='{cls("sphere")}'>Sphere</a>
+                <a href='/tasks' class='{cls("dashboard")}'>Tasks</a>
                 <a href='/leads' class='{cls("leads")}'>Leads</a>
                 <a href='/emails' class='{cls("emails")}'>Email</a>
                 <a href='/chat' class='{cls("chat")}'>Chat</a>
@@ -434,7 +434,7 @@ def logout():
 def complete_task(task_id: int, request: Request, email: str = Depends(require_auth)):
     import register as reg
     reg.complete_task(task_id)          # also completes the Outlook flag, if it came from one
-    back = request.headers.get("referer") or "/"
+    back = request.headers.get("referer") or "/tasks"
     return RedirectResponse(url=back, status_code=303)
 
 
@@ -447,7 +447,7 @@ def add_task_from_dashboard(
     waiting_on: str = Form(""),
     priority: str = Form("medium"),
     blocking: str = Form(""),
-    back: str = Form("/"),
+    back: str = Form("/tasks"),
     email: str = Depends(require_auth),
 ):
     """Add a task straight from the Dashboard tab. Blank due date = the 7-day default;
@@ -455,7 +455,7 @@ def add_task_from_dashboard(
     import register as reg
     desc = description.strip()
     if not back.startswith("/") or back.startswith("//"):
-        back = "/"
+        back = "/tasks"
     if not desc:
         return RedirectResponse(url=back, status_code=303)
     result = reg.add_task(
@@ -479,7 +479,7 @@ def snooze_task(task_id: int, request: Request, email: str = Depends(require_aut
     t = reg.get_task(task_id)
     if t and t["status"] == "open":
         reg.update_task(task_id, due_date=max(reg.today(), t["due_date"] or reg.today()) + timedelta(days=3))
-    return RedirectResponse(url=request.headers.get("referer") or "/", status_code=303)
+    return RedirectResponse(url=request.headers.get("referer") or "/tasks", status_code=303)
 
 
 @app.post("/reopen/{task_id}")
@@ -491,10 +491,10 @@ def reopen_task(task_id: int, email: str = Depends(require_auth)):
     conn.commit()
     cur.close()
     conn.close()
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url="/tasks", status_code=303)
 
 
-def _safe_back(back: str, default: str = "/#register") -> str:
+def _safe_back(back: str, default: str = "/tasks#register") -> str:
     back = (back or "").strip()
     return back if back.startswith("/") and not back.startswith("//") else default
 
@@ -506,7 +506,7 @@ def task_page(task_id: int, back: str = "", saved: int = 0, err: str = "", email
     import task_log
     t = reg.get_task(task_id)
     if not t:
-        return RedirectResponse(url="/#register", status_code=303)
+        return RedirectResponse(url="/tasks#register", status_code=303)
     errors = {"empty": "Write what happened, or pick Waiting on, Push date or Done."}
     body = task_log.page(t, reg.get_updates(task_id), back=_safe_back(back),
                          error=errors.get(err, ""), saved=bool(saved))
@@ -1005,7 +1005,7 @@ def emails_page(ok: int = 0, err: str = "", email: str = Depends(require_auth)):
     </html>"""
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/tasks", response_class=HTMLResponse)
 def home(filter: str = "open", project: int = 0, ball: str = "", added: int = 0,
          email: str = Depends(require_auth)):
     """
@@ -1057,7 +1057,7 @@ def home(filter: str = "open", project: int = 0, ball: str = "", added: int = 0,
     def link(**kw):
         q = {"filter": filter, "project": project, "ball": ball}
         q.update(kw)
-        return "/?" + "&".join(f"{k}={v}" for k, v in q.items() if v not in ("", 0, None))
+        return "/tasks?" + "&".join(f"{k}={v}" for k, v in q.items() if v not in ("", 0, None))
 
     projects_html = ""
     for p in projects:
@@ -1255,6 +1255,7 @@ def home(filter: str = "open", project: int = 0, ball: str = "", added: int = 0,
 # OPERATIONS SPHERE
 # ============================================================
 
+@app.get("/", response_class=HTMLResponse)
 @app.get("/sphere", response_class=HTMLResponse)
 def sphere_page(email: str = Depends(require_auth)):
     """3D map of every task, project, source, contact and lead, plus Outlook unread."""

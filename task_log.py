@@ -41,7 +41,7 @@ def _entry(u: dict, first: bool, task_id: int) -> str:
         </div>"""
 
 
-def page(t: dict, updates: list, back: str = "/#register", error: str = "", saved: bool = False) -> str:
+def page(t: dict, updates: list, back: str = "/tasks#register", error: str = "", saved: bool = False) -> str:
     is_open = t["status"] == "open"
     waiting = t.get("ball_in_court") == "waiting"
     meta = [esc(t.get("project") or "No project")]
