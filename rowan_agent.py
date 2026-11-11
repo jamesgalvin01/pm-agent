@@ -55,6 +55,9 @@ SYSTEM_PROMPT = """You are Rowan, James Galvin's AI project manager at Miami Coa
 - When you don't have enough info, ASK a single clarifying question instead of guessing. Never invent details that aren't in the data.
 - If you notice something concerning that's adjacent to what was asked (overdue task, red RAG, blocked dependency), surface it briefly — but don't go off on tangents.
 
+# Must accomplish
+James keeps a daily "Must accomplish" list of up to 10 items (resets 6 AM ET, unfinished items roll over). When he says something is a must, a priority for today, or "put X on today's list", use add_must (promote the register task by task_id if it exists). Use list_musts when he asks what's on today's list, and update_must when he says he finished, wants to swap or drop one.
+
 # How you use tools
 You have read tools (safe, run them whenever useful) and write tools (change the database).
 
@@ -300,6 +303,34 @@ TOOLS = [
                 "task_id": {"type": "integer", "description": "The task ID."},
             },
             "required": ["task_id"],
+        },
+    },
+    {
+        "name": "list_musts",
+        "description": "Today's Must accomplish list (up to 10 things James has to get done today; resets 6 AM ET). Returns each item's must_id, title, status (open/done), linked task_id, project, how many days it has rolled over.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "add_must",
+        "description": "Put something on today's Must accomplish list. Give task_id to promote a register task (preferred when the item is already in the register; find it with list_open_tasks), or title for a one-off item. No confirmation needed: James asked for it. If the list is full, the lowest auto-picked item is bumped back to the register.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer", "description": "Register task to promote."},
+                "title": {"type": "string", "description": "One-off item text, when it isn't a register task."},
+            },
+        },
+    },
+    {
+        "name": "update_must",
+        "description": "Change an item on today's Must accomplish list: 'done' (also closes its register task), 'undo', 'swap' (replace with the next register task) or 'remove' (back to the register only). No confirmation needed.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "must_id": {"type": "integer"},
+                "action": {"type": "string", "enum": ["done", "undo", "swap", "remove"]},
+            },
+            "required": ["must_id", "action"],
         },
     },
     {
@@ -1262,7 +1293,32 @@ def _last_proposal_text(conversation_id: int) -> str:
     return row[0] if row else ""
 
 
+def tool_list_musts(args: dict) -> dict:
+    import musts
+    rows = musts.get_list()
+    return {"summary": musts.summary(rows), "items": [{
+        "must_id": r["id"], "title": r["title"], "status": r["status"], "task_id": r["task_id"],
+        "project": r["project"], "due_date": r["due_date"].isoformat() if r["due_date"] else None,
+        "rolled_over_days": r["rolled_days"] or 0, "flagged": r["flagged"]} for r in rows]}
+
+
+def tool_add_must(args: dict) -> dict:
+    import musts
+    return musts.add(title=args.get("title"), task_id=args.get("task_id"), source="chat")
+
+
+def tool_update_must(args: dict) -> dict:
+    import musts
+    fn = {"done": musts.complete, "undo": musts.undo, "swap": musts.swap, "remove": musts.remove}.get(args.get("action"))
+    if not fn:
+        return {"ok": False, "error": "action must be done, undo, swap or remove"}
+    return fn(int(args["must_id"]))
+
+
 TOOL_DISPATCH = {
+    "list_musts":          tool_list_musts,
+    "add_must":            tool_add_must,
+    "update_must":         tool_update_must,
     "list_open_tasks":     tool_list_open_tasks,
     "list_projects":       tool_list_projects,
     "get_project_details": tool_get_project_details,

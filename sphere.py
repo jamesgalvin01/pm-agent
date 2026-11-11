@@ -172,6 +172,31 @@ TEMPLATE = r"""
 #sph .chip.proj{border-color:currentColor}
 #sph .tlab{position:absolute;transform:translate(-50%,7px);font-size:11px;max-width:190px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:2px 7px;border-radius:4px;background:rgba(12,10,38,.86);color:var(--ink);pointer-events:auto;cursor:pointer;border-left:3px solid var(--accent)}
 #sph .tlab:hover{background:rgba(155,77,235,.35)}
+#sph .panel.must{border-color:rgba(251,191,36,.55);box-shadow:0 0 0 1px rgba(251,191,36,.15),0 8px 30px rgba(251,191,36,.08)}
+#sph .panel.must h2{color:#fbbf24}
+#sph .mprog{height:6px;background:rgba(12,10,38,.8);border-radius:3px;overflow:hidden;margin:-2px 0 8px}
+#sph .mprog b{display:block;height:100%;width:0;background:linear-gradient(90deg,#fbbf24,#f8fafc);transition:width .4s}
+#sph .mrow{display:grid;grid-template-columns:26px 1fr auto auto;gap:6px;align-items:center;padding:3px 0;border-top:1px solid rgba(53,47,120,.6)}
+#sph .mrow:first-child{border-top:0}
+#sph .mchk{width:24px;height:24px;border-radius:6px;border:1.5px solid #f8fafc;background:none;color:#14113A;font-weight:700;cursor:pointer;font-size:13px;line-height:1}
+#sph .mrow.done .mchk{background:#fbbf24;border-color:#fbbf24}
+#sph .mtxt{background:none;border:0;color:var(--ink);text-align:left;font:inherit;font-size:12.5px;line-height:1.35;cursor:pointer;padding:4px 2px;border-radius:6px}
+#sph .mtxt:hover{background:rgba(155,77,235,.16)}
+#sph .mtxt small{display:block;color:var(--muted);font-size:11px}
+#sph .mrow.done .mtxt span{color:var(--muted);text-decoration:line-through}
+#sph .mact{background:none;border:0;color:var(--muted);cursor:pointer;font-size:14px;padding:6px 7px;border-radius:6px;min-width:30px;min-height:30px}
+#sph .mact:hover{color:var(--ink);background:rgba(155,77,235,.2)}
+#sph .madd{display:flex;gap:6px;margin-top:8px}
+#sph .madd input{flex:1;min-width:0;background:rgba(12,10,38,.7);border:1px solid var(--line);border-radius:999px;color:var(--ink);padding:7px 12px;font:inherit;font-size:12.5px}
+#sph .madd input:focus{outline:2px solid #fbbf24;outline-offset:1px}
+#sph .mlab{position:absolute;transform:translate(-50%,-50%);font-family:var(--mono);font-size:10.5px;font-weight:600;min-width:18px;height:18px;line-height:18px;text-align:center;padding:0 4px;border-radius:9px;background:#f8fafc;color:#14113A;cursor:pointer;pointer-events:auto}
+#sph .mlab.done{background:#fbbf24}
+#sph .mlab.flag{background:#ff4d6d;color:#fff}
+#sph .mlab:hover{outline:2px solid #fbbf24}
+#sph .lab.today{color:#fbbf24;border-color:rgba(251,191,36,.6);font-size:12px;font-weight:500;pointer-events:auto;cursor:pointer}
+#sph .lab.today span{color:#f8fafc}
+#sph .toast{position:absolute;left:50%;bottom:44px;transform:translateX(-50%);background:rgba(20,17,58,.97);border:1px solid #fbbf24;color:var(--ink);padding:8px 14px;border-radius:999px;font-size:13px;z-index:6;max-width:calc(100% - 32px)}
+#sph .toast[hidden]{display:none}
 #sph .tip{position:absolute;pointer-events:none;background:rgba(20,17,58,.97);border:1px solid var(--line);border-radius:8px;padding:5px 9px;font-size:12px;line-height:1.35;max-width:270px;z-index:4}
 #sph .tip small{display:block;color:var(--muted);font-family:var(--mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase}
 #sph .tip[hidden]{display:none}
@@ -253,6 +278,7 @@ TEMPLATE = r"""
         <button class="chip" id="labBtn" aria-pressed="false">Show task names</button></div>
       </div>
       <div class="tip" id="tip" hidden></div>
+      <div class="toast" id="toast" hidden role="status"></div>
       <div class="legend" id="legend"></div>
       <div class="card" id="card" hidden role="dialog" aria-live="polite">
         <button class="x" id="cardX" aria-label="Close details">×</button>
@@ -260,6 +286,13 @@ TEMPLATE = r"""
       </div>
     </section>
     <div class="rail">
+      <div class="panel must" id="mustPanel">
+        <h2>Must accomplish today <span id="mustHead"></span></h2>
+        <div class="mprog"><b id="mustBar"></b></div>
+        <div id="mustList"></div>
+        <form id="mustAdd" class="madd"><input id="mustInput" placeholder="Add a must, or a task # (e.g. 3772)" aria-label="Add a must" autocomplete="off"><button type="submit" class="chip on">Add</button></form>
+        <p class="note" style="margin:6px 0 0">Resets 6 AM with your top register items; unfinished ones roll over. ★ any task to add it. Telegram: /musts, /must.</p>
+      </div>
       <div class="panel">
         <h2>Right now</h2>
         <div class="tiles">
@@ -541,7 +574,7 @@ function nearest(cx,cy,radius){ const rect=canvas.getBoundingClientRect(); let b
   pickables.forEach(n => { if(filtering() && !n.vis) return; const s=screenOf(n,rect); if(s.z < -3) return;
     const d=Math.hypot(s.x+rect.left-cx, s.y+rect.top-cy); if(d<radius){ const sc=d + s.depth*.4 - (KIND_BONUS[n.kind]||0); if(sc<bd){bd=sc;best=n;} } });
   return best; }
-function pick(cx,cy,radius){ const n = nearest(cx,cy,radius); n ? select(n) : closeCard(); }
+function pick(cx,cy,radius){ const m = typeof pickToday==="function" ? pickToday(cx,cy) : null; if(m){ selected=null; pMat.uniforms.uSel.value=-1; showMustCard(m.id); return; } const n = nearest(cx,cy,radius); n ? select(n) : closeCard(); }
 let hoverRaf = 0;
 function hoverAt(cx,cy){ if(hoverRaf) return; hoverRaf = requestAnimationFrame(() => { hoverRaf=0;
   const n = nearest(cx,cy,18); hover=n; pMat.uniforms.uHov.value = n ? n.i : -1; canvas.style.cursor = n ? "pointer" : "grab";
@@ -614,7 +647,7 @@ function showCard(n){ let h=""; const r=n.ref;
     <dt>Ball in court</dt><dd>${t.waiting?`<b style="color:var(--warn)">Theirs</b> · waiting on ${esc(t.wait||"someone")}`:"Yours"}</dd>
     ${t.waiting?`<dt>Last movement</dt><dd>${t.idle===null?"—":t.idle===0?"Today":plural(t.idle,"day")+" ago"}${t.stale?' <span class="st stale">stale</span>':""}</dd>`:""}
     <dt>Came from</dt><dd>${esc(srcName(t.srcFull))}</dd><dt>Last touched</dt><dd>${t.touched||"—"}</dd><dt>Progress notes</dt><dd>${t.upd||"None logged"}</dd></dl>
-    <p style="margin:8px 0 0"><a href="/task/${t.id}?back=/sphere">Open task to log progress, push the date or mark done →</a></p>`;
+    <p style="margin:8px 0 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${typeof MUSTS!=="undefined" && MUSTS && MUSTS.items.some(m=>m.task_id===t.id && m.status!=="done") ? `<span class="st ok" style="font-size:11px;padding:4px 9px">★ On today's list</span>` : `<button class="chip on" data-mustadd="${t.id}">★ Make it a must</button>`}<a href="/task/${t.id}?back=/">Open task to log progress, push the date or mark done →</a></p>`;
   } else if(n.kind==="project"){ const p=r, list=tasks.filter(t=>t.p===p).sort((a,b)=>(b.late??-999)-(a.late??-999));
     h=`<div class="k">Project</div><h3>${esc(PROJECTS[p].name)}</h3><dl><dt>Open</dt><dd>${openBy[p]||0}</dd><dt>Past due</dt><dd>${lateBy[p]||0}</dd><dt>Waiting on others</dt><dd>${list.filter(t=>t.waiting).length}</dd><dt>Completed</dt><dd>${(doneBy[p]||0).toLocaleString()}</dd></dl>`
       + (list.length?`<ul>${list.slice(0,6).map(t=>`<li>${esc(t.desc)} ${taskLink(t)} <span style="color:${t.overdue?"var(--crit)":"var(--muted)"}">· ${lateText(t)}</span></li>`).join("")}</ul>`:"")
@@ -709,7 +742,7 @@ const NP = projOrder.length, projIx = {}; projOrder.forEach((p,i)=>projIx[p]=i);
 const srcKeys = Object.keys(SOURCES);
 const M = Math.max(1, months.length), mIdx = m => Math.max(0, months.indexOf(m));
 const maxDone = Math.max(1, ...Object.values(doneBy));
-const stackYaw = () => camera.aspect < 1 ? -.8 : 0;   // phones look down the row of buildings
+const stackYaw = () => camera.aspect < 1 ? .75 : 0;   // phones look down the row of buildings
 const SHAPES = {
   sphere:{name:"Sphere", cam:34, rotX:.25, bow:1, gain:1, cap:"Every task linked to its project and to where it came from. Bright = open, dim = completed."},
   orbit:{name:"Orbit", cam:46, rotX:.95, bow:0, gain:.9, cap:"Rings are due windows around today: the closer to the center, the more overdue. Each wedge is a project."},
@@ -865,8 +898,9 @@ const STACK = (function(){
   const FLOOR = .78, SLAB = .62, BW = 3.6, BD = 3, SP = 6.4;
   const floorColor = t => t.overdue ? "#ff4d6d" : t.waiting ? "#fbbf24" : (t.late!==null && t.late>=-7) ? "#B45CF0" : "#5b6399";
   const order = projOrder.slice().sort((a,b)=>(openBy[b]||0)-(openBy[a]||0) || (doneBy[b]||0)-(doneBy[a]||0));
-  const cols = [...order, "lead"], x0 = -(cols.length-1)/2*SP;
-  const B = {}; cols.forEach((p,i) => { const done = p==="lead" ? 0 : (doneBy[p]||0);
+  const slots = ["today", ...order, "lead"], x0 = -(slots.length-1)/2*SP;   // the Today tower leads the row
+  const cols = slots.filter(p => p!=="today");
+  const B = {}; slots.forEach((p,i) => { const done = (p==="lead" || p==="today") ? 0 : (doneBy[p]||0);
     B[p] = {x:x0+i*SP, pod: p==="lead" ? .3 : .35 + Math.log10(done+1)*.75, floors:[]}; });
   const byDue = (a,b) => (a.due||"9999") < (b.due||"9999") ? -1 : (a.due||"9999") > (b.due||"9999") ? 1 : 0;
   order.forEach(p => tasks.filter(t=>t.p===p).sort(byDue).forEach((t,j) => { t.floor = j; B[p].floors.push(t); }));
@@ -881,9 +915,10 @@ const STACK = (function(){
   const offices = {}; let oi = 0;
   partyNodes.forEach(n => { const p = n.ref.list[0].p; const sameB = partyNodes.filter(m=>m.ref.list[0].p===p); const k = sameB.indexOf(n);
     offices[n.i] = [B[p].x + (k-(sameB.length-1)/2)*1.7, .45, 6.2]; oi++; });
+  B.today.x -= 1.2;
   return {B, cols, floorY, top, floorColor, cranes, offices, BW, BD, SLAB, FLOOR};
 })();
-SHAPES.stack = {name:"Stacking plan", cam:62, rotX:.22, lookY:4.2, bow:0, gain:.07, cap:"Each building is a project; each floor an open task, soonest due at the bottom. Red = past due, amber = waiting on someone, purple = due in 7 days, gray = later. The ghosted podium is completed work. Cranes mark who you're waiting on: amber after 5 days without movement, red after 10."};
+SHAPES.stack = {name:"Stacking plan", cam:64, rotX:.22, lookY:4.2, lookX:-2.5, bow:0, gain:.07, cap:"Each building is a project; each floor an open task, soonest due at the bottom. Red = past due, amber = waiting on someone, purple = due in 7 days, gray = later. The ghosted podium is completed work. Cranes mark who you're waiting on: amber after 5 days without movement, red after 10."};
 (function(){ const S = STACK;
   const f = n => { const k=n.kind;
     if(k==="task"){ const b=S.B[n.ref.p]; return [b.x, S.floorY(n.ref.p, n.ref.floor), S.BD/2+.05]; }
@@ -941,11 +976,11 @@ glabel("stack", "FLOORS: SOONEST DUE AT BOTTOM  ·  PODIUM = COMPLETED WORK", V(
 glabel("stack", "SITE OFFICES = WHO YOU'RE WAITING ON", V(0, -.6, 8.4), "#fbbf24");
 
 let morph = {t:1, from:null, to:LAY.sphere, bowFrom:1, bowTo:1, gainFrom:1};
-let camGoal = null, lookY = 0, stackInit = false;
+let camGoal = null, lookY = 0, lookX = 0, stackInit = false;
 function setShape(name){
   if(name===shape && morph.t>=1) return;
   morph = {t:0, from:pPos.slice(), to:LAY[name], bowFrom:bow, bowTo:SHAPES[name].bow, gainFrom:gain, gainTo:SHAPES[name].gain, prev:shape};
-  shape = name; camGoal = SHAPES[name].cam * (camera.aspect<1 ? (name==="stack" ? 1.15 : Math.min(1.7, .92/camera.aspect)) : 1);
+  shape = name; camGoal = SHAPES[name].cam * (camera.aspect<1 ? (name==="stack" ? 1.3 : Math.min(1.7, .92/camera.aspect)) : 1);
   target = {y: name==="stack" ? stackYaw() : rotY, x:SHAPES[name].rotX};
   renderShapes(); $("shapeCap").textContent = SHAPES[name].cap;
 }
@@ -973,24 +1008,152 @@ renderShapes();
   let k=0; edges.forEach(ed => { k = curve(ed, ePos, k); }); eGeo.attributes.position.needsUpdate = true;
   renderShapes(); $("shapeCap").textContent = SHAPES[S].cap; })();
 
+// ---------- MUST ACCOMPLISH: the Today tower + panel ----------
+let MUSTS = DATA.musts || null;
+const todayGrp = new THREE.Group(); world.add(todayGrp);
+const mustLabels = [];
+const TODAY_POS = {x: STACK.B.today.x, z: .4};
+const TF = {h:.9, slab:.7, w:4.6, d:3.6};
+const mustFloorY = j => .3 + j*TF.h + TF.slab/2;
+let flagMesh = null, roofLabel = null;
+function disposeGroup(g){ while(g.children.length){ const c=g.children.pop(); c.geometry && c.geometry.dispose(); c.material && c.material.dispose(); } }
+function mustColor(m){ return m.status==="done" ? "#fbbf24" : m.flagged ? "#ff4d6d" : "#f8fafc"; }
+function buildToday(){
+  disposeGroup(todayGrp); mustLabels.forEach(l => l.el.remove()); mustLabels.length = 0; flagMesh = null;
+  if(!MUSTS) return;
+  const items = MUSTS.items, slots = Math.max(MUSTS.max, items.length), {x, z} = TODAY_POS;
+  const box = new THREE.BoxGeometry(TF.w, TF.slab, TF.d), edges = new THREE.EdgesGeometry(box);
+  const M = (c, o, lines) => lines ? new THREE.LineBasicMaterial({color:c, transparent:true, opacity:o, depthWrite:false})
+                                   : new THREE.MeshBasicMaterial({color:c, transparent:true, opacity:o, depthWrite:false});
+  for(let j=0;j<slots;j++){ const m = items[j], y = mustFloorY(j);
+    if(m){ const c = mustColor(m);
+      const mesh = new THREE.Mesh(box, M(c, m.status==="done" ? .78 : .1)); mesh.position.set(x, y, z); mesh.userData.must = m; todayGrp.add(mesh);
+      const e = new THREE.LineSegments(edges, M(c, .95, true)); e.position.copy(mesh.position); todayGrp.add(e);
+      const el = document.createElement("div"); el.className = "mlab" + (m.status==="done" ? " done" : "") + (m.flagged && m.status!=="done" ? " flag" : "");
+      el.innerHTML = m.status==="done" ? "✓" : m.flagged ? `${j+1}!` : `${j+1}`; el.title = m.title;
+      el.addEventListener("click", ev => { ev.stopPropagation(); showMustCard(m.id); });
+      $("labels").appendChild(el); mustLabels.push({el, v:V(x, y, z + TF.d/2 + .05)});
+      // beam to the task's floor in its project building
+      const t = m.task_id && m.status!=="done" ? tasks.find(tk => tk.id===m.task_id) : null;
+      if(t){ const a = V(x + TF.w/2, y, z), b = t.node.pos.clone();
+        todayGrp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, V((a.x+b.x)/2, Math.max(a.y,b.y)+2.5, (a.z+b.z)/2), b]),
+          M(m.flagged ? "#ff4d6d" : "#fbbf24", .35, true))); }
+    } else {
+      const e = new THREE.LineSegments(edges, M("#8a84c8", .22, true)); e.position.set(x, mustFloorY(j), z); todayGrp.add(e);
+    }
+  }
+  // scaffold corners + base pad
+  const top = mustFloorY(slots-1) + TF.slab/2 + .2, pts = [];
+  [[-1,-1],[1,-1],[1,1],[-1,1]].forEach(([a,b]) => pts.push(V(x+a*(TF.w/2+.25),0,z+b*(TF.d/2+.25)), V(x+a*(TF.w/2+.25),top,z+b*(TF.d/2+.25))));
+  todayGrp.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), M("#fbbf24", .4, true)));
+  const pad = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.PlaneGeometry(TF.w+2.4, TF.d+2.4).rotateX(-Math.PI/2)), M("#fbbf24", .7, true)); pad.position.set(x,0,z); todayGrp.add(pad);
+  // topped out: flag on the roof
+  const roofY = mustFloorY(items.length ? items.length-1 : 0) + TF.slab/2;
+  if(MUSTS.topped_out){
+    todayGrp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([V(x,roofY,z), V(x,roofY+3,z)]), M("#fbbf24", 1, true)));
+    const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.BufferAttribute(new Float32Array([0,0,0, 1.8,-.45,0, 0,-.9,0]),3));
+    flagMesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({color:"#fbbf24", side:THREE.DoubleSide, transparent:true, opacity:.95})); flagMesh.position.set(x, roofY+3, z); todayGrp.add(flagMesh);
+  }
+  if(!roofLabel){ roofLabel = document.createElement("div"); roofLabel.className="lab today"; roofLabel.addEventListener("click", () => document.getElementById("mustPanel").scrollIntoView({behavior:"smooth"})); $("labels").appendChild(roofLabel); }
+  roofLabel.innerHTML = MUSTS.topped_out ? `TODAY · <span>TOPPED OUT ${MUSTS.done}/${MUSTS.total}</span>` : `TODAY · <span>${MUSTS.done}/${MUSTS.total} done</span>`;
+  roofLabel.v = V(x, (MUSTS.topped_out ? roofY+3.4 : mustFloorY(slots-1)+TF.slab/2+.6), z);
+}
+function todayFrame(t, rect){
+  if(flagMesh) flagMesh.rotation.y = Math.sin(t*2.2)*.35;
+  const place = (el, v) => { wp.copy(v).applyMatrix4(world.matrixWorld); const zz=wp.z; wp.project(camera);
+    el.style.left=((wp.x+1)/2*rect.width)+"px"; el.style.top=((1-wp.y)/2*rect.height)+"px"; el.style.opacity = zz>-4 ? 1 : .35; };
+  mustLabels.forEach(l => place(l.el, l.v));
+  if(roofLabel && roofLabel.v) place(roofLabel, roofLabel.v);
+}
+function pickToday(cx, cy){
+  const rect = canvas.getBoundingClientRect(), ray = new THREE.Raycaster();
+  ray.setFromCamera({x:((cx-rect.left)/rect.width)*2-1, y:-((cy-rect.top)/rect.height)*2+1}, camera);
+  const hit = ray.intersectObjects(todayGrp.children.filter(c => c.userData.must), false)[0];
+  return hit ? hit.object.userData.must : null;
+}
+
+// panel
+function renderMusts(){
+  const box = $("mustList"), head = $("mustHead"), bar = $("mustBar");
+  if(!MUSTS){ box.innerHTML = `<p class="note">Couldn't load today's list.</p>`; return; }
+  head.textContent = `${MUSTS.done}/${MUSTS.total}${MUSTS.topped_out ? " · topped out" : ""}`;
+  bar.style.width = (MUSTS.total ? MUSTS.done/MUSTS.total*100 : 0) + "%";
+  box.innerHTML = MUSTS.items.map((m,i) => { const sub = [m.project, m.status!=="done" && m.late>0 ? `<span style="color:var(--crit)">${m.late}d overdue</span>` : m.late===0 ? "due today" : "",
+      m.rolled ? `<span style="color:${m.flagged?"var(--crit)":"var(--warn)"}">rolled ${m.rolled}d${m.flagged?" ⚠":""}</span>` : "",
+      m.task_id ? "" : "one-off"].filter(Boolean).join(" · ");
+    return `<div class="mrow ${m.status==="done"?"done":""}">
+      <button class="mchk" data-m${m.status==="done"?"undo":"done"}="${m.id}" aria-label="${m.status==="done"?"Mark not done":"Mark done"}">${m.status==="done"?"✓":""}</button>
+      <button class="mtxt" data-mopen="${m.id}"><span>${i+1}. ${esc(m.title)}</span>${sub?`<small>${sub}</small>`:""}</button>
+      ${m.status==="done" ? "" : `<button class="mact" data-mswap="${m.id}" title="Swap for the next register task" aria-label="Swap">⇄</button><button class="mact" data-mremove="${m.id}" title="Remove from today" aria-label="Remove">✕</button>`}
+    </div>`; }).join("") || `<p class="note">Nothing on today's list yet.</p>`;
+}
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.hidden=false; clearTimeout(toast.h); toast.h=setTimeout(()=>t.hidden=true, 3200); }
+async function mustApi(path, body, okMsg){
+  try {
+    const r = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body||{}), credentials:"same-origin"});
+    const j = await r.json();
+    if(j.list){ MUSTS = j.list; renderMusts(); buildToday(); }
+    toast(j.ok ? (typeof okMsg==="function" ? okMsg(j) : okMsg) : (j.error || "That didn't work."));
+    return j;
+  } catch(e){ toast("Couldn't reach Rowan. Check your connection and try again."); return null; }
+}
+const mustById = id => MUSTS && MUSTS.items.find(m => m.id===+id);
+function showMustCard(id){
+  const m = mustById(id); if(!m) return; const t = m.task_id ? tasks.find(tk=>tk.id===m.task_id) : null;
+  const why = {auto:"Rowan picked this from your register this morning.", rollover:`Rolled over from an earlier day (${m.rolled}d so far).`,
+    dashboard:"You added this on the dashboard.", telegram:"You added this from Telegram.", chat:"You asked Rowan to add this."}[m.source] || "";
+  let h = `<div class="k" style="color:${m.status==="done"?"var(--warn)":m.flagged?"var(--crit)":"#f8fafc"}">Must accomplish · ${MUSTS.items.indexOf(m)+1} of ${MUSTS.items.length}</div>
+    <h3>${esc(m.title)}${m.flagged && m.status!=="done" ? ` <span class="st late">rolled ${m.rolled}d</span>` : ""}</h3><p class="why">${esc(why)}${m.flagged && m.status!=="done" ? " It's been rolling for 3+ days: do it, swap it, or drop it." : ""}</p>
+    <dl>${m.project?`<dt>Project</dt><dd>${esc(m.project)}</dd>`:""}${m.due?`<dt>Due</dt><dd>${m.due}${m.late>0?` · <span style="color:var(--crit)">${m.late}d overdue</span>`:""}</dd>`:""}<dt>Status</dt><dd>${m.status==="done"?"Done":"Open"}</dd></dl>
+    <p style="margin:10px 0 0;display:flex;gap:8px;flex-wrap:wrap">
+      ${m.status==="done" ? `<button class="chip" data-mundo="${m.id}">↩ Not done</button>` : `<button class="chip on" data-mdone="${m.id}">✓ Done</button><button class="chip" data-mswap="${m.id}">⇄ Swap</button><button class="chip" data-mremove="${m.id}">✕ Remove</button>`}
+      ${t ? `<button class="chip" data-go="${t.id}">Show in its building</button>` : ""}${m.task_id ? `<a href="/task/${m.task_id}?back=/" style="align-self:center">Open task →</a>` : ""}</p>`;
+  $("cardBody").innerHTML = h; $("card").style.top = (document.querySelector("#sph .tools").offsetHeight + 18) + "px"; $("card").hidden = false;
+}
+async function mustAction(kind, id){
+  const m = mustById(id), name = m ? short(m.title, 40) : "";
+  if(kind==="done") return mustApi(`/musts/${id}/done`, null, j => j.topped_out ? "Topped out! Everything on today's list is done." : `Done: ${name}`);
+  if(kind==="undo") return mustApi(`/musts/${id}/undo`, null, `Reopened: ${name}`);
+  if(kind==="swap") return mustApi(`/musts/${id}/swap`, null, j => j.replacement ? `Swapped in: ${short(j.replacement,40)}` : "Swapped out. Nothing left in the register to add.");
+  if(kind==="remove") return mustApi(`/musts/${id}/remove`, null, `Removed from today: ${name}`);
+}
+function mustClicks(e){
+  const b = e.target.closest("[data-mdone],[data-mundo],[data-mswap],[data-mremove],[data-mopen],[data-mustadd]"); if(!b) return false;
+  e.stopPropagation();
+  const d = b.dataset;
+  if(d.mopen) showMustCard(+d.mopen);
+  else if(d.mustadd) mustApi("/musts/add", {task_id:+d.mustadd}, j => j.duplicate ? "Already on today's list." : "Added to today's list" + (j.bumped ? `; bumped: ${short(j.bumped,30)}` : "")).then(() => selected && showCard(selected));
+  else { const kind = d.mdone ? "done" : d.mundo ? "undo" : d.mswap ? "swap" : "remove"; const id = +(d.mdone||d.mundo||d.mswap||d.mremove);
+    mustAction(kind, id).then(() => { if(!$("card").hidden && !selected) showMustCard(id); }); }
+  return true;
+}
+$("mustPanel").addEventListener("click", mustClicks);
+$("card").addEventListener("click", mustClicks, true);
+$("mustAdd").addEventListener("submit", e => { e.preventDefault(); const v = $("mustInput").value.trim(); if(!v) return;
+  const id = /^#?\d+$/.test(v) ? +v.replace("#","") : null;
+  mustApi("/musts/add", id ? {task_id:id} : {title:v}, j => "Added to today's list" + (j.bumped ? `; bumped: ${short(j.bumped,30)}` : "")).then(j => { if(j && j.ok) $("mustInput").value = ""; }); });
+renderMusts(); buildToday();
+
 // ---------- loop ----------
 function resize(){ const r=stage.getBoundingClientRect(); renderer.setSize(r.width,r.height,false); camera.aspect=r.width/r.height; camera.updateProjectionMatrix();
   pMat.uniforms.uScale.value=Math.max(.7,Math.min(1.25,Math.min(r.height,r.width*1.3)/650));
-  if(!fitted && r.width>0){ camDist = SHAPES[shape].cam * (camera.aspect<1 ? (shape==="stack" ? 1.15 : Math.min(1.7, .92/camera.aspect)) : 1); if(shape==="stack") rotY = stackYaw(); fitted = true; } }
+  if(!fitted && r.width>0){ camDist = SHAPES[shape].cam * (camera.aspect<1 ? (shape==="stack" ? 1.3 : Math.min(1.7, .92/camera.aspect)) : 1); if(shape==="stack") rotY = stackYaw(); fitted = true; } }
 new ResizeObserver(resize).observe(stage); resize();
 applyFilter();
 const clock = new THREE.Clock();
 let lastT = performance.now();
 function frame(){ const t=clock.getElapsedTime(), now=performance.now(), dt=Math.min(.05,(now-lastT)/1000); lastT=now;
   stepMorph(dt);
-  lookY += ((SHAPES[shape].lookY||0) - lookY)*.06;
+  lookY += ((SHAPES[shape].lookY||0) - lookY)*.06; { let gx = SHAPES[shape].lookX||0;
+    if(camera.aspect<1 && shape==="stack"){ const tw = V(STACK.B.today.x+10,0,0).applyMatrix4(world.matrixWorld); gx = tw.x; }   // phones: keep Today and the tall towers in frame
+    lookX += (gx - lookX)*.06; }
   if(camGoal!==null){ camDist += (camGoal-camDist)*.06; if(Math.abs(camGoal-camDist)<.05) camGoal=null; }
   Object.entries(guideGroups).forEach(([key,grp]) => { const o = key===shape ? morph.t : key===morph.prev ? 1-morph.t : 0;
     grp.visible = o>0.01; grp.children.forEach(c => c.material.opacity = o*(c.userData.op ?? (key==="skyline"||key==="orbit"?.85:.6))); });
   if(state.spin && !dragging && !auto && !target && !hover && performance.now()-idle>6000 && $("card").hidden) auto=true;
   if(auto && !hover){ if(shape==="stack") rotY += (stackYaw() + 0.38*Math.sin(t*.12) - rotY)*.02; else rotY+=.0016; }
   if(target){ const wrap=a=>Math.atan2(Math.sin(a),Math.cos(a)), dy=wrap(target.y-rotY); rotY+=dy*.08; rotX+=(target.x-rotX)*.08; if(Math.abs(dy)<.002&&Math.abs(target.x-rotX)<.002) target=null; }
-  world.rotation.set(rotX,rotY,0,"XYZ"); camera.position.set(0,lookY,camDist); camera.lookAt(0,lookY,0);
+  world.rotation.set(rotX,rotY,0,"XYZ"); camera.position.set(lookX,lookY,camDist); camera.lookAt(lookX,lookY,0);
   pMat.uniforms.uTime.value = reduceMotion?0:t; world.updateMatrixWorld();
   const rect = canvas.getBoundingClientRect();
   guideLabels.forEach(gl => { const o = gl.shape===shape ? morph.t : 0; if(o<.02){ gl.el.style.opacity=0; return; }
@@ -1007,6 +1170,7 @@ function frame(){ const t=clock.getElapsedTime(), now=performance.now(), dt=Math
   shown.forEach(o => { let y=o.y; for(const q of placed){ if(Math.abs(q.x-o.x)<170 && Math.abs(q.y-y)<19) y=q.y+19; }
     if(y > rect.height-34 && !o.sel){ o.el.style.display="none"; return; }
     placed.push({x:o.x,y}); o.el.style.display="block"; o.el.style.left=o.x+"px"; o.el.style.top=y+"px"; o.el.style.zIndex=o.sel?3:1; });
+  todayFrame(t, rect);
   $("hSpin").textContent=(((rotY*180/Math.PI)%360+360)%360).toFixed(1)+"°";
   renderer.render(scene,camera); requestAnimationFrame(frame); }
 frame();

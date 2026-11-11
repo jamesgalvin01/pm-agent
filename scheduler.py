@@ -118,6 +118,22 @@ def run_morning_push():
     run_step("overnight email", overnight_email)
 
 
+def run_musts_morning():
+    """Every day 6:00 — reset Must accomplish (rollovers + top register tasks) and send it."""
+    if not should_run_job("musts_morning"):
+        return
+    from musts_tg import morning
+    log(f"Musts morning: {morning()}")
+
+
+def run_musts_recap():
+    """Every day 18:00 — what got done, what rolls to tomorrow."""
+    if not should_run_job("musts_recap"):
+        return
+    from musts_tg import recap
+    log(f"Musts recap: {recap()}")
+
+
 def run_flag_sync():
     """Every 20 min, 6am-9pm: flagged Outlook emails -> tasks; replies on waiting threads reset the stale clock."""
     if not 6 <= datetime.now().hour < 21:
@@ -200,6 +216,8 @@ def run_invoice_email_job():
 schedule.every().monday.at("08:00").do(safe("weekly jobs", run_weekly_jobs))
 
 # Action-item register (register.py / capture.py / digest.py)
+schedule.every().day.at("06:00").do(safe("musts morning", run_musts_morning))
+schedule.every().day.at("18:00").do(safe("musts recap", run_musts_recap))
 schedule.every().day.at("06:40").do(safe("sent mail scan", run_sent_mail_scan))
 schedule.every().day.at("07:00").do(safe("morning push", run_morning_push))
 schedule.every(20).minutes.do(safe("flag sync", run_flag_sync))
@@ -220,6 +238,7 @@ log("Scheduler started.")
 log("- Register: flagged Outlook emails synced every 20 min (6am-9pm).")
 log("- Register: sent-mail proposals at 6:40, morning exceptions push at 7:00, weekdays (Mondays + portfolio review).")
 log("- Inbox task scan and daily summary email: retired.")
+log("- Must accomplish: list resets and goes to Telegram at 6am; recap at 6pm.")
 log("- Status reports run every Monday at 8am.")
 log("- LinkedIn draft sent every day at 9am (Telegram, or email if Telegram is off).")
 log("- Email reply drafts: real time as mail arrives, 15-min backup; offered 7am-7pm weekdays.")

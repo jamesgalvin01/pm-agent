@@ -75,6 +75,10 @@ HELP_TEXT = (
     "/won Soundbath - proposal signed: set up folders, project, kickoff items and billing\n"
     "/proposal Soundbath for Vishal Sapra, Celebration Ventures, 3114 N Bay Rd Miami; 410 NE 29th St; "
     "DD 4 mo @ 5k, precon 12 @ 12k - draft a proposal (you edit the scope, then Build)\n\n"
+    "MUST ACCOMPLISH (resets 6 AM, recap 6 PM)\n"
+    "/musts - today's must-do list with Done / Swap buttons\n"
+    "/must call Marc re budget - add a one-off item\n"
+    "/must 3772 - put a register task on today's list\n\n"
     "ACTION ITEMS\n"
     "/task send Soundbath budget to Vishal Friday - something you owe\n"
     "/wait survey from Fortin, 71 NoBE, Tuesday - something you're waiting on\n"
@@ -697,6 +701,11 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
             from register_telegram import update_action
             background.add_task(update_action, action, ref, message)
             return done
+        if action in ("md", "mu", "ms", "mr", "mref"):
+            _answer_callback(callback.get("id", ""), "Got it")
+            import musts_tg
+            background.add_task(musts_tg.action, action, ref, message)
+            return done
         if action in ("tu", "tp", "td", "tsn", "tch", "tko"):
             _answer_callback(callback.get("id", ""), "Got it")
             from register_telegram import task_action
@@ -874,6 +883,14 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
                          "Add the details, e.g. /wait survey from the surveyor, 71 NoBE, Tuesday")
             return done
         background.add_task(regtg.capture, rest, cmd == "wait")
+        return done
+    if cmd in ("musts", "today10", "focus"):
+        import musts_tg
+        background.add_task(musts_tg.send_list)
+        return done
+    if cmd == "must" and text.startswith("/"):
+        import musts_tg
+        background.add_task(musts_tg.command, rest)
         return done
     if cmd in ("update", "u", "progress") and text.startswith("/"):
         background.add_task(regtg.log_update, rest_full, "telegram")

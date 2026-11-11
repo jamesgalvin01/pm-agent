@@ -2,7 +2,7 @@ import os
 import html as _html
 from urllib.parse import quote_plus
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 import uvicorn
 
 from db import get_connection
@@ -1269,6 +1269,12 @@ def sphere_page(email: str = Depends(require_auth)):
         cur.close()
         conn.close()
     data["inbox"] = sphere.inbox_status()
+    try:
+        import musts
+        data["musts"] = musts.for_page()
+    except Exception as e:
+        print(f"[home] musts unavailable: {e}")
+        data["musts"] = None
     updated = datetime.now(reg.ET).strftime("%-I:%M %p")
     return f"""<!DOCTYPE html>
     <html lang='en'>
@@ -1278,6 +1284,35 @@ def sphere_page(email: str = Depends(require_auth)):
         {sphere.render(data, updated)}
     </body>
     </html>"""
+
+
+# ============================================================
+# MUST ACCOMPLISH (JSON, used by the Home page)
+# ============================================================
+
+@app.get("/musts.json")
+def musts_json(email: str = Depends(require_auth)):
+    import musts
+    return JSONResponse(musts.for_page())
+
+
+@app.post("/musts/add")
+async def musts_add(request: Request, email: str = Depends(require_auth)):
+    import musts
+    body = await request.json()
+    task_id = body.get("task_id")
+    res = musts.add(title=body.get("title"), task_id=int(task_id) if task_id else None, source="dashboard")
+    return JSONResponse({**res, "list": musts.for_page()}, status_code=200 if res.get("ok") else 400)
+
+
+@app.post("/musts/{must_id}/{action}")
+def musts_change(must_id: int, action: str, email: str = Depends(require_auth)):
+    import musts
+    fn = {"done": musts.complete, "undo": musts.undo, "swap": musts.swap, "remove": musts.remove}.get(action)
+    if not fn:
+        return JSONResponse({"ok": False, "error": "Unknown action."}, status_code=404)
+    res = fn(must_id)
+    return JSONResponse({**res, "list": musts.for_page()}, status_code=200 if res.get("ok") else 400)
 
 
 # ============================================================
