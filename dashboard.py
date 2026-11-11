@@ -29,6 +29,7 @@ from app_shell import router as app_shell_router, APP_HEAD, MOBILE_CSS, tab_bar
 from graph_push import router as graph_push_router, start_keeper as start_graph_keeper
 from field import router as field_router
 import command_center
+import sphere
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 
@@ -257,6 +258,7 @@ def header_html(email: str, active: str) -> str:
             </div>
             <nav>
                 <a href='/' class='{cls("dashboard")}'>Dashboard</a>
+                <a href='/sphere' class='{cls("sphere")}'>Sphere</a>
                 <a href='/leads' class='{cls("leads")}'>Leads</a>
                 <a href='/emails' class='{cls("emails")}'>Email</a>
                 <a href='/chat' class='{cls("chat")}'>Chat</a>
@@ -1244,6 +1246,35 @@ def home(filter: str = "open", project: int = 0, ball: str = "", added: int = 0,
                 {tasks_html}
             </table>
         </div>
+    </body>
+    </html>"""
+
+
+
+# ============================================================
+# OPERATIONS SPHERE
+# ============================================================
+
+@app.get("/sphere", response_class=HTMLResponse)
+def sphere_page(email: str = Depends(require_auth)):
+    """3D map of every task, project, source, contact and lead, plus Outlook unread."""
+    import register as reg
+    from datetime import datetime
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        data = sphere.gather(cur, reg.today())
+    finally:
+        cur.close()
+        conn.close()
+    data["inbox"] = sphere.inbox_status()
+    updated = datetime.now(reg.ET).strftime("%-I:%M %p")
+    return f"""<!DOCTYPE html>
+    <html lang='en'>
+    {page_head("Rowan · Sphere")}
+    <body>
+        {header_html(email, "sphere")}
+        {sphere.render(data, updated)}
     </body>
     </html>"""
 
