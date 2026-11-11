@@ -257,7 +257,7 @@ def header_html(email: str, active: str) -> str:
                 <span class='sub'>Miami Coastline</span>
             </div>
             <nav>
-                <a href='/' class='{cls("sphere")}'>Sphere</a>
+                <a href='/' class='{cls("sphere")}'>Home</a>
                 <a href='/tasks' class='{cls("dashboard")}'>Tasks</a>
                 <a href='/leads' class='{cls("leads")}'>Leads</a>
                 <a href='/emails' class='{cls("emails")}'>Email</a>
@@ -1272,7 +1272,7 @@ def sphere_page(email: str = Depends(require_auth)):
     updated = datetime.now(reg.ET).strftime("%-I:%M %p")
     return f"""<!DOCTYPE html>
     <html lang='en'>
-    {page_head("Rowan · Sphere")}
+    {page_head("Rowan · Home")}
     <body>
         {header_html(email, "sphere")}
         {sphere.render(data, updated)}

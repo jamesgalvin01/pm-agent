@@ -246,7 +246,6 @@ TEMPLATE = r"""
       <canvas id="gl"></canvas>
       <div class="labels" id="labels"></div>
       <div class="tools">
-        <div class="chiprow" id="shapes" role="group" aria-label="Shape"></div>
         <div class="shapecap" id="shapeCap"></div>
         <div class="search"><input id="q" type="search" placeholder="Find a task, person, project…" autocomplete="off" aria-label="Search the sphere"><div class="results" id="results" hidden role="listbox"></div></div>
         <div class="chiprow"><div id="chips" style="display:contents"></div>
@@ -962,8 +961,8 @@ function stepMorph(dt){
   if(selected) highlight(selected);
   return true;
 }
-function renderShapes(){ $("shapes").innerHTML = Object.entries(SHAPES).map(([k,s]) => `<button class="chip ${k===shape?"on":""}" data-shape="${k}" aria-pressed="${k===shape}">${s.name}</button>`).join(""); }
-$("shapes").addEventListener("click", e => { const b=e.target.closest("[data-shape]"); if(b) setShape(b.dataset.shape); });
+function renderShapes(){ if(!$("shapes")) return; $("shapes").innerHTML = Object.entries(SHAPES).map(([k,s]) => `<button class="chip ${k===shape?"on":""}" data-shape="${k}" aria-pressed="${k===shape}">${s.name}</button>`).join(""); }
+$("shapes") && $("shapes").addEventListener("click", e => { const b=e.target.closest("[data-shape]"); if(b) setShape(b.dataset.shape); });
 renderShapes();
 
 // open in the Stacking plan every time (other shapes are one tap away)

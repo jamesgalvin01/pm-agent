@@ -45,7 +45,7 @@ APP_HEAD = f"""
 
 
 TABS = (
-    ("sphere", "/", "ti-building-skyscraper", "Sphere"),
+    ("sphere", "/", "ti-building-skyscraper", "Home"),
     ("dashboard", "/tasks", "ti-list-check", "Tasks"),
     ("leads", "/leads", "ti-target-arrow", "Leads"),
     ("emails", "/emails", "ti-mail", "Email"),
