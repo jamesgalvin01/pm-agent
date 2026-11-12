@@ -559,13 +559,14 @@ canvas.addEventListener("pointerdown", e => { canvas.setPointerCapture(e.pointer
 canvas.addEventListener("pointermove", e => {
   if(!pointers.has(e.pointerId)){ if(e.pointerType==="mouse") hoverAt(e.clientX,e.clientY); return; }
   pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
-  if(pointers.size===2){ const [a,b]=[...pointers.values()], d=Math.hypot(a.x-b.x,a.y-b.y); if(pinch0) camDist=Math.min(60,Math.max(12,camDist*pinch0/d)); pinch0=d; moved+=10; return; }
+  if(pointers.size===2){ const [a,b]=[...pointers.values()], d=Math.hypot(a.x-b.x,a.y-b.y); if(pinch0){ if(shape==="stack") zoomMul=Math.min(2.5,Math.max(.35,zoomMul*pinch0/d)); else camDist=Math.min(60,Math.max(12,camDist*pinch0/d)); } pinch0=d; moved+=10; return; }
   const dx=e.clientX-last.x, dy=e.clientY-last.y; moved+=Math.abs(dx)+Math.abs(dy); rotY+=dx*.006; rotX=Math.max(-1.4,Math.min(1.4,rotX+dy*.006)); last={x:e.clientX,y:e.clientY}; });
 const endPtr = e => { pointers.delete(e.pointerId); if(pointers.size<2) pinch0=null;
   if(!pointers.size){ dragging=false; if(moved<8) pick(e.clientX,e.clientY,e.pointerType==="mouse"?20:32); idle=performance.now(); } };
 canvas.addEventListener("pointerup", endPtr); canvas.addEventListener("pointercancel", endPtr);
 canvas.addEventListener("pointerleave", () => { hover=null; pMat.uniforms.uHov.value=-1; hideTip(); });
-canvas.addEventListener("wheel", e => { e.preventDefault(); camDist=Math.min(60,Math.max(12,camDist*(1+e.deltaY*.001))); }, {passive:false});
+canvas.addEventListener("wheel", e => { e.preventDefault(); if(shape==="stack") zoomMul=Math.min(2.5,Math.max(.35,zoomMul*(1+e.deltaY*.001))); else camDist=Math.min(60,Math.max(12,camDist*(1+e.deltaY*.001))); }, {passive:false});
+let zoomMul = 1;
 const pickables = nodes.filter(n=>n.pick), wp = V();
 function screenOf(n, rect){ wp.copy(n.pos).applyMatrix4(world.matrixWorld); const depth=wp.distanceTo(camera.position), z=wp.z; wp.project(camera);
   return {x:(wp.x+1)/2*rect.width, y:(1-wp.y)/2*rect.height, depth, z}; }
@@ -742,7 +743,7 @@ const NP = projOrder.length, projIx = {}; projOrder.forEach((p,i)=>projIx[p]=i);
 const srcKeys = Object.keys(SOURCES);
 const M = Math.max(1, months.length), mIdx = m => Math.max(0, months.indexOf(m));
 const maxDone = Math.max(1, ...Object.values(doneBy));
-const stackYaw = () => camera.aspect < 1 ? .75 : 0;   // phones look down the row of buildings
+const stackYaw = () => camera.aspect < 1 ? 1.0 : 0;   // phones look down the row of buildings
 const SHAPES = {
   sphere:{name:"Sphere", cam:34, rotX:.25, bow:1, gain:1, cap:"Every task linked to its project and to where it came from. Bright = open, dim = completed."},
   orbit:{name:"Orbit", cam:46, rotX:.95, bow:0, gain:.9, cap:"Rings are due windows around today: the closer to the center, the more overdue. Each wedge is a project."},
@@ -1134,6 +1135,39 @@ $("mustAdd").addEventListener("submit", e => { e.preventDefault(); const v = $("
   mustApi("/musts/add", id ? {task_id:id} : {title:v}, j => "Added to today's list" + (j.bumped ? `; bumped: ${short(j.bumped,30)}` : "")).then(j => { if(j && j.ok) $("mustInput").value = ""; }); });
 renderMusts(); buildToday();
 
+// ---------- auto-fit: keep the whole city centered in the space between the toolbar and the legend ----------
+const fitPts = (() => { const S = STACK, pts = [], hw = S.BW/2+.4, hd = S.BD/2+.4;
+  Object.entries(S.B).forEach(([p,b]) => { const w = p==="today" ? 3.8 : hw, d = p==="today" ? 3.2 : hd; const top = p==="today" ? .3 + Math.max(10, (DATA.musts&&DATA.musts.items.length)||0)*.9 + 1.2 : S.top(p) + 1.2;
+    const extra = S.cranes.some(c=>c.p==p) ? 2.6 : 0;
+    [[-w,-d],[w,-d],[w,d],[-w,d]].forEach(([dx,dz]) => { pts.push(V(b.x+dx,0,dz)); pts.push(V(b.x+dx,top+extra,dz)); }); });
+  Object.values(S.offices).forEach(o => pts.push(V(o[0],0,o[2]+.6)));
+  return pts; })();
+const _fv = V(), _rot = new THREE.Matrix4();
+const _pts = fitPts.map(() => V());
+let _fit = null;
+function fitStack(){
+  _rot.makeRotationFromEuler(new THREE.Euler(rotX, rotY, 0, "XYZ"));
+  let zc = 0; fitPts.forEach((p,i) => { _pts[i].copy(p).applyMatrix4(_rot); zc += _pts[i].z; }); zc /= _pts.length;
+  const r = stage.getBoundingClientRect(), tools = document.querySelector("#sph .tools"), leg = $("legend");
+  const top = (tools ? tools.offsetTop + tools.offsetHeight : 0) + 10, bot = (leg ? leg.offsetHeight + 18 : 0);
+  // usable box in normalized device coordinates
+  const xr = 1 - (r.width < 700 ? 30 : 70)/r.width, yTop = 1 - 2*top/r.height, yBot = -1 + 2*bot/r.height;
+  const t = Math.tan(camera.fov*Math.PI/360), A = camera.aspect;
+  let {x:cx, y:cy, d} = _fit || {x:0, y:4, d:70};
+  for(let it=0; it<6; it++){   // project through the real perspective camera, then re-center and re-size
+    let sx0=1e9, sx1=-1e9, sy0=1e9, sy1=-1e9;
+    _pts.forEach(p => { const w = Math.max(.5, d - p.z); const sx = (p.x-cx)/(w*t*A), sy = (p.y-cy)/(w*t);
+      if(sx<sx0) sx0=sx; if(sx>sx1) sx1=sx; if(sy<sy0) sy0=sy; if(sy>sy1) sy1=sy; });
+    const scale = Math.max((sx1-sx0)/(2*xr), (sy1-sy0)/(yTop-yBot));
+    const w = d - zc;
+    cx += (sx0+sx1)/2 * w*t*A;
+    cy += ((sy0+sy1)/2 - (yTop+yBot)/2) * w*t;
+    d = zc + w*scale;
+  }
+  _fit = {x:cx, y:cy, d};
+  return _fit;
+}
+
 // ---------- loop ----------
 function resize(){ const r=stage.getBoundingClientRect(); renderer.setSize(r.width,r.height,false); camera.aspect=r.width/r.height; camera.updateProjectionMatrix();
   pMat.uniforms.uScale.value=Math.max(.7,Math.min(1.25,Math.min(r.height,r.width*1.3)/650));
@@ -1144,9 +1178,8 @@ const clock = new THREE.Clock();
 let lastT = performance.now();
 function frame(){ const t=clock.getElapsedTime(), now=performance.now(), dt=Math.min(.05,(now-lastT)/1000); lastT=now;
   stepMorph(dt);
-  lookY += ((SHAPES[shape].lookY||0) - lookY)*.06; { let gx = SHAPES[shape].lookX||0;
-    if(camera.aspect<1 && shape==="stack"){ const tw = V(STACK.B.today.x+10,0,0).applyMatrix4(world.matrixWorld); gx = tw.x; }   // phones: keep Today and the tall towers in frame
-    lookX += (gx - lookX)*.06; }
+  if(shape==="stack"){ const f = fitStack(); lookX += (f.x-lookX)*.08; lookY += (f.y-lookY)*.08; camDist += (f.d*zoomMul-camDist)*.08; camGoal=null; }
+  else { lookY += ((SHAPES[shape].lookY||0) - lookY)*.06; lookX += ((SHAPES[shape].lookX||0) - lookX)*.06; }
   if(camGoal!==null){ camDist += (camGoal-camDist)*.06; if(Math.abs(camGoal-camDist)<.05) camGoal=null; }
   Object.entries(guideGroups).forEach(([key,grp]) => { const o = key===shape ? morph.t : key===morph.prev ? 1-morph.t : 0;
     grp.visible = o>0.01; grp.children.forEach(c => c.material.opacity = o*(c.userData.op ?? (key==="skyline"||key==="orbit"?.85:.6))); });
@@ -1160,7 +1193,7 @@ function frame(){ const t=clock.getElapsedTime(), now=performance.now(), dt=Math
     wp.copy(gl.v).applyMatrix4(world.matrixWorld); const z=wp.z; wp.project(camera);
     gl.el.style.left=((wp.x+1)/2*rect.width)+"px"; gl.el.style.top=((1-wp.y)/2*rect.height)+"px"; gl.el.style.opacity = (z>-4?1:.35)*o; });
   labelled.forEach(n => { const s=screenOf(n,rect); n.el.style.left=s.x+"px"; n.el.style.top=s.y+"px";
-    n.el.style.opacity = n.el.dataset.dim ? .1 : s.z>-2 ? (n.kind==="waiting"?.9:1) : .15; });
+    n.el.style.opacity = (n.kind==="source" && shape==="stack" && rect.width < 700) ? 0 : n.el.dataset.dim ? .1 : s.z>-2 ? (n.kind==="waiting"?.9:1) : .15; });
   const shown = [];
   tasks.forEach(tk => { const el=tk.el; if(!el.dataset.show && selected!==tk.node){ el.style.display="none"; return; }
     const s=screenOf(tk.node,rect); if(s.z<-1){ el.style.display="none"; return; }
