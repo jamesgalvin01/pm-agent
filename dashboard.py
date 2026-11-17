@@ -263,6 +263,7 @@ def header_html(email: str, active: str) -> str:
                 <a href='/leads' class='{cls("leads")}'>Leads</a>
                 <a href='/emails' class='{cls("emails")}'>Email</a>
                 <a href='/meetings' class='{cls("meetings")}'>Meetings</a>
+                <a href='/contracts' class='{cls("contracts")}'>Contracts</a>
                 <a href='/chat' class='{cls("chat")}'>Chat</a>
                 <a href='/field' class='{cls("field")}'>Field</a>
             </nav>
@@ -1323,6 +1324,74 @@ def musts_change(must_id: int, action: str, email: str = Depends(require_auth)):
         return JSONResponse({"ok": False, "error": "Unknown action."}, status_code=404)
     res = fn(must_id)
     return JSONResponse({**res, "list": musts.for_page()}, status_code=200 if res.get("ok") else 400)
+
+
+# ============================================================
+# CONTRACTS (Owner-side review / compare / draft / Q&A)
+# ============================================================
+
+def _contracts_shell(title: str, body: str, email: str) -> str:
+    import contracts_page
+    import meetings_page
+    return f"""<!DOCTYPE html>
+    <html lang='en'>
+    {page_head(_html.escape(title) + " · Rowan")}
+    <body>
+    <style>{command_center.CSS}{meetings_page.CSS}{contracts_page.CSS}</style>
+        {header_html(email, "contracts")}
+        <div class='container'>{body}</div>
+    </body>
+    </html>"""
+
+
+@app.get("/contracts", response_class=HTMLResponse)
+def contracts_list(err: str = "", email: str = Depends(require_auth)):
+    import contracts
+    import contracts_page
+    import register as reg
+    errors = {"missing": "Upload the contract for a review or comparison, or type what you need for Draft / Question.",
+              "start": "Couldn't start that. Try again."}
+    body = contracts_page.list_page(contracts.recent(), reg.list_projects(), err=errors.get(err, ""))
+    return _contracts_shell("Contracts", body, email)
+
+
+@app.post("/contracts/new")
+def contracts_new(background: BackgroundTasks, mode: str = Form("review"), project: str = Form(""),
+                  perspective: str = Form("Owner"), request: str = Form(""),
+                  file: Optional[UploadFile] = File(None), email: str = Depends(require_auth)):
+    import contracts
+    content = file.file.read() if (file is not None and file.filename) else None
+    filename = file.filename if content else None
+    mime = (file.content_type or "") if content else ""
+    if mode not in contracts.MODES:
+        mode = "review"
+    if (mode in ("review", "compare") and not content) or (mode in ("draft", "question") and not request.strip()):
+        return RedirectResponse(url="/contracts?err=missing", status_code=303)
+    try:
+        rid = contracts.create(mode, project.strip() or None, filename, request.strip(),
+                               perspective=perspective or "Owner", source="dashboard")
+    except Exception as e:
+        print(f"[contracts] create failed: {e}")
+        return RedirectResponse(url="/contracts?err=start", status_code=303)
+    background.add_task(contracts.run, rid, content, mime, filename)
+    return RedirectResponse(url=f"/contracts/{rid}", status_code=303)
+
+
+@app.get("/contracts/{rid}", response_class=HTMLResponse)
+def contracts_view(rid: int, email: str = Depends(require_auth)):
+    import contracts
+    import contracts_page
+    r = contracts.get(rid)
+    if not r:
+        return RedirectResponse(url="/contracts", status_code=303)
+    return _contracts_shell(r["filename"] or "Contracts", contracts_page.view_page(r), email)
+
+
+@app.get("/contracts/{rid}/status.json")
+def contracts_status(rid: int, email: str = Depends(require_auth)):
+    import contracts
+    r = contracts.get(rid)
+    return JSONResponse({"ok": bool(r), "status": r["status"] if r else None})
 
 
 # ============================================================

@@ -50,6 +50,7 @@ TABS = (
     ("leads", "/leads", "ti-target-arrow", "Leads"),
     ("emails", "/emails", "ti-mail", "Email"),
     ("meetings", "/meetings", "ti-users-group", "Meet"),
+    ("contracts", "/contracts", "ti-file-certificate", "Contract"),
     ("chat", "/chat", "ti-message-circle", "Chat"),
     ("field", "/field", "ti-crane", "Field"),
 )
@@ -93,6 +94,8 @@ MOBILE_CSS = """
                 color: #9993D0; text-decoration: none; font-size: 11px; padding: 6px 0;
                 -webkit-tap-highlight-color: transparent;
             }
+            .tabbar a { min-width: 0; }
+            .tabbar a span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
             .tabbar a i { font-size: 23px; }
             .tabbar a.active { color: #B45CF0; }
 

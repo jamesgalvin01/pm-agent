@@ -65,6 +65,11 @@ HELP_TEXT = (
     "Voice note: I'll transcribe it and pull out tasks and notes.\n"
     "Photo: I'll look at it and file it to OneDrive under the project. Put the project in the caption.\n"
     "PDF: I'll review it as your owner's rep and file it. Add a question in the caption if you have one.\n\n"
+    "CONTRACTS (Owner-side, GC and design consultant agreements)\n"
+    "/contract - then send the PDF or Word file for a review + redlines (or put /contract in the file's caption)\n"
+    "/contract compare 71 NoBE - next file gets compared to MCM's standard positions\n"
+    "/contract draft Owner rider to A201 for Farbstein: 10% retainage, 558 opt-out\n"
+    "/contract is no-damages-for-delay enforceable in Florida? - ask a question\n\n"
     "/today - calendar, what's due, emails waiting on you\n"
     "/week - the week ahead\n"
     "/inbox - emails you haven't answered\n"
@@ -857,8 +862,17 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
                             "image/jpeg", None, caption)
         return done
 
-    # Any other file
+    # Contract file: caption "/contract ...", or sent right after /contract
     doc = message.get("document")
+    if doc:
+        import contracts_tg
+        pending = contracts_tg.wants_file()
+        if pending or caption.lower().startswith("/contract"):
+            background.add_task(contracts_tg.handle_file, doc.get("file_id"), doc.get("file_size") or 0,
+                                doc.get("mime_type") or "", doc.get("file_name"), caption, pending)
+            return done
+
+    # Any other file
     if doc:
         background.add_task(handle_file, "document", doc.get("file_id"), doc.get("file_size") or 0,
                             doc.get("mime_type") or "", doc.get("file_name"), caption)
@@ -867,6 +881,13 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
     text = (message.get("text") or "").strip()
     if not text:
         return Response(status_code=204)
+
+    if text.lower() in ("cancel", "stop", "never mind", "nevermind"):
+        import contracts_tg
+        if contracts_tg.wants_file():
+            contracts_tg.clear()
+            send_message("Contract review cancelled.")
+            return done
 
     cmd, rest = _command(text)
     if text.startswith("/"):
@@ -994,6 +1015,11 @@ async def telegram_webhook(request: Request, background: BackgroundTasks):
     if cmd == "linkedin":
         send_message("Drafting a LinkedIn post...")
         background.add_task(linkedin_on_demand)
+        return done
+
+    if cmd in ("contract", "contracts") and text.startswith("/"):
+        import contracts_tg
+        background.add_task(contracts_tg.command, rest_full)
         return done
 
     if cmd in ("proposal", "proposals") and text.startswith("/"):
