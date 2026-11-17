@@ -17,7 +17,7 @@ A meeting moves through four states:
   closed      Minutes are filed as a project note.
 
 Shorthand in the notes (all optional; Claude also finds untagged items):
-  AI:  action item for someone else     "AI: Jonny - pool shop drawings Fri"
+  Act: action item for someone else     "Act: Jonny - pool shop drawings Fri"
   ME:  action item for James            "ME: send revised budget to owner"
   D:   decision                         "D: owner approved tile upgrade"
   ?:   open question (carried forward)  "?: who pays for the survey"
@@ -463,7 +463,7 @@ Attendees: {attendees}
 {blocking_rule}
 
 James's notes may use shorthand. Honor it:
-  AI: <owner> - <item> <date>   action item for someone else (ball_in_court "waiting", waiting_on = owner)
+  Act: <owner> - <item> <date>  action item for someone else (ball_in_court "waiting", waiting_on = owner); "Act." and "AI:" mean the same
   ME: <item>                    action item for James (ball_in_court "me")
   D: <text>                     a decision
   ?: <text>                     an open question

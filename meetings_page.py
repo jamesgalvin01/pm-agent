@@ -187,14 +187,14 @@ def _live(m: dict, carry: dict, projects: list) -> str:
         <div class='panel notes'>
             <div class='notes-h'>
                 <div class='chips'>
-                    <button type='button' class='chip-i' data-ins='AI: ' title='Action item for someone else'>AI</button>
+                    <button type='button' class='chip-i' data-ins='Act: ' title='Action item for someone else'>Act</button>
                     <button type='button' class='chip-i' data-ins='ME: ' title='Action item for you'>ME</button>
                     <button type='button' class='chip-i' data-ins='D: ' title='Decision'>D</button>
                     <button type='button' class='chip-i' data-ins='?: ' title='Open question'>?</button>
                 </div>
                 <span id='saveState' class='save-st'>Saved</span>
             </div>
-            <textarea id='notes' placeholder='Type as the meeting goes.&#10;AI: Jonny - pool shop drawings Fri&#10;ME: send revised budget to owner&#10;D: owner approved tile upgrade&#10;?: who pays for the survey'>{esc(m["notes"] or "")}</textarea>
+            <textarea id='notes' placeholder='Type as the meeting goes.&#10;Act: Jonny - pool shop drawings Fri&#10;ME: send revised budget to owner&#10;D: owner approved tile upgrade&#10;?: who pays for the survey'>{esc(m["notes"] or "")}</textarea>
         </div>
 
         <div class='panel rec'>
