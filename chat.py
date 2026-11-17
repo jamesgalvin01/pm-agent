@@ -312,6 +312,7 @@ def chat_page(email: str = Depends(require_auth)):
                 <a href='/'>Home</a> · <a href='/tasks'>Tasks</a>
                 <a href='/leads'>Leads</a>
                 <a href='/emails'>Email</a>
+                <a href='/meetings'>Meetings</a>
                 <a href='/chat' class='active'>Chat</a>
             </nav>
             <div class='user'>

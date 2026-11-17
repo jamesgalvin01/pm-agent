@@ -1,7 +1,8 @@
 import os
 import html as _html
 from urllib.parse import quote_plus
-from fastapi import FastAPI, Request, Form, Depends, HTTPException
+from typing import Optional
+from fastapi import FastAPI, Request, Form, Depends, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 import uvicorn
 
@@ -261,6 +262,7 @@ def header_html(email: str, active: str) -> str:
                 <a href='/tasks' class='{cls("dashboard")}'>Tasks</a>
                 <a href='/leads' class='{cls("leads")}'>Leads</a>
                 <a href='/emails' class='{cls("emails")}'>Email</a>
+                <a href='/meetings' class='{cls("meetings")}'>Meetings</a>
                 <a href='/chat' class='{cls("chat")}'>Chat</a>
                 <a href='/field' class='{cls("field")}'>Field</a>
             </nav>
@@ -1093,7 +1095,12 @@ def home(filter: str = "open", project: int = 0, ball: str = "", added: int = 0,
             </form>"""
         desc = f"<a class='task-link' href='{task_url}'>{esc(t['description'] or '')}</a>"
         if t.get("source_url"):
-            desc += f" <a href='{esc(t['source_url'])}' target='_blank' title='Open the email' style='color:#FF8FC4;'><i class='ti ti-mail'></i></a>"
+            _mtg = t["source_url"].startswith("/meetings/")
+            _tgt = "" if _mtg else " target='_blank'"
+            _ttl = "Open the meeting" if _mtg else "Open the email"
+            _ico = "ti-users-group" if _mtg else "ti-mail"
+            desc += (f" <a href='{esc(t['source_url'])}'{_tgt} title='{_ttl}' style='color:#FF8FC4;'>"
+                     f"<i class='ti {_ico}'></i></a>")
         if t.get("blocking"):
             desc += " <span style='color:#c792ea;font-size:12px;'>blocking</span>"
         task_text = f"<s>{desc}</s>" if is_complete else desc
@@ -1118,8 +1125,11 @@ def home(filter: str = "open", project: int = 0, ball: str = "", added: int = 0,
         if t["due_date"]:
             meta.append(f"due {reg.short_date(t['due_date'])}")
         color = tier_colors.get(tier, "#4A4396")
-        email_link = (f" <a href='{esc(t['source_url'])}' target='_blank' style='color:#B45CF0;'>"
-                      f"<i class='ti ti-mail'></i></a>") if t.get("source_url") else ""
+        _mtg = (t.get("source_url") or "").startswith("/meetings/")
+        _tgt = "" if _mtg else " target='_blank'"
+        _ico = "ti-users-group" if _mtg else "ti-mail"
+        email_link = (f" <a href='{esc(t['source_url'])}'{_tgt} style='color:#B45CF0;'>"
+                      f"<i class='ti {_ico}'></i></a>") if t.get("source_url") else ""
         if is_complete:
             buttons = f"""
                 <form method='post' action='/reopen/{t["id"]}'><button class='t-open'><i class='ti ti-rotate'></i> Reopen</button></form>
@@ -1313,6 +1323,174 @@ def musts_change(must_id: int, action: str, email: str = Depends(require_auth)):
         return JSONResponse({"ok": False, "error": "Unknown action."}, status_code=404)
     res = fn(must_id)
     return JSONResponse({**res, "list": musts.for_page()}, status_code=200 if res.get("ok") else 400)
+
+
+# ============================================================
+# MEETINGS (live notes, recording, transcripts -> minutes + draft tasks)
+# ============================================================
+
+def _meeting_shell(title: str, body: str, email: str) -> str:
+    import meetings_page
+    return f"""<!DOCTYPE html>
+    <html lang='en'>
+    {page_head(_html.escape(title) + " · Rowan")}
+    <body>
+    <style>{command_center.CSS}{meetings_page.CSS}</style>
+        {header_html(email, "meetings")}
+        <div class='container'>{body}</div>
+    </body>
+    </html>"""
+
+
+def _int(v, default=0):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+@app.get("/meetings", response_class=HTMLResponse)
+def meetings_list(err: str = "", email: str = Depends(require_auth)):
+    import meetings
+    import meetings_page
+    import register as reg
+    meetings.ensure_schema()
+    errors = {"start": "Couldn't start that meeting. Try again."}
+    body = meetings_page.list_page(meetings.calendar_today(), meetings.recent(), reg.list_projects(),
+                                   err=errors.get(err, ""))
+    return _meeting_shell("Meetings", body, email)
+
+
+@app.post("/meetings/start")
+def meetings_start(title: str = Form(""), project_id: str = Form("0"), platform: str = Form(""),
+                   attendees: str = Form(""), event_id: str = Form(""), email: str = Depends(require_auth)):
+    import meetings
+    try:
+        mid = meetings.start(title, project_id=_int(project_id) or None, platform=platform,
+                             attendees=attendees, event_id=event_id or None)
+    except Exception as e:
+        print(f"[meetings] start failed: {e}")
+        return RedirectResponse(url="/meetings?err=start", status_code=303)
+    return RedirectResponse(url=f"/meetings/{mid}", status_code=303)
+
+
+@app.get("/meetings/{meeting_id}", response_class=HTMLResponse)
+def meeting_view(meeting_id: int, email: str = Depends(require_auth)):
+    import meetings
+    import meetings_page
+    import register as reg
+    m = meetings.get(meeting_id)
+    if not m:
+        return RedirectResponse(url="/meetings", status_code=303)
+    carry = meetings.carried_items(m)
+    items = meetings.proposals(meeting_id) if m["status"] in ("review", "closed") else []
+    body = meetings_page.meeting_page(m, items, carry, reg.list_projects())
+    return _meeting_shell(m["title"], body, email)
+
+
+@app.get("/meetings/{meeting_id}/status.json")
+def meeting_status(meeting_id: int, email: str = Depends(require_auth)):
+    import meetings
+    m = meetings.get(meeting_id)
+    return JSONResponse({"ok": bool(m), "status": m["status"] if m else None, "error": m and m.get("error")})
+
+
+@app.post("/meetings/{meeting_id}/meta")
+async def meeting_meta(meeting_id: int, request: Request, email: str = Depends(require_auth)):
+    import meetings
+    b = await request.json()
+    meetings.update_meta(meeting_id, title=b.get("title"), project_id=_int(b.get("project_id")),
+                         platform=b.get("platform"), attendees=b.get("attendees"))
+    return JSONResponse({"ok": True})
+
+
+@app.post("/meetings/{meeting_id}/notes")
+async def meeting_notes(meeting_id: int, request: Request, email: str = Depends(require_auth)):
+    import meetings
+    b = await request.json()
+    ok = meetings.save_notes(meeting_id, b.get("notes") or "")
+    return JSONResponse({"ok": ok}, status_code=200 if ok else 404)
+
+
+@app.post("/meetings/{meeting_id}/audio")
+def meeting_audio(meeting_id: int, file: UploadFile = File(...), email: str = Depends(require_auth)):
+    import meetings
+    try:
+        block = meetings.transcribe_chunk(meeting_id, file.file.read(), file.filename or "chunk.webm")
+    except Exception as e:
+        print(f"[meetings] audio chunk failed: {e}")
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=502)
+    return JSONResponse({"ok": True, "block": block})
+
+
+@app.post("/meetings/{meeting_id}/transcript")
+def meeting_transcript(meeting_id: int, text: str = Form(""), file: Optional[UploadFile] = File(None),
+                       email: str = Depends(require_auth)):
+    import meetings
+    try:
+        if file is not None and file.filename:
+            content = meetings.text_from_file(file.filename, file.file.read())
+            n = meetings.add_transcript_text(meeting_id, content, label=f"Transcript: {file.filename}")
+        else:
+            n = meetings.add_transcript_text(meeting_id, text, label="Transcript")
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=400)
+    return JSONResponse({"ok": True, "chars": n})
+
+
+@app.post("/meetings/{meeting_id}/end")
+def meeting_end(meeting_id: int, background: BackgroundTasks, email: str = Depends(require_auth)):
+    import meetings
+    if not meetings.end(meeting_id):
+        return JSONResponse({"ok": False, "error": "There are no notes or transcript to work from yet."},
+                            status_code=400)
+    background.add_task(meetings.process, meeting_id)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/meetings/{meeting_id}/items/{proposal_id}")
+async def meeting_item(meeting_id: int, proposal_id: int, request: Request, email: str = Depends(require_auth)):
+    import meetings
+    b = await request.json()
+    action = b.get("action")
+    if action == "drop":
+        ok = meetings.drop(meeting_id, proposal_id)
+        return JSONResponse({"ok": bool(ok)}, status_code=200 if ok else 409)
+    if action != "approve":
+        return JSONResponse({"ok": False, "error": "Unknown action."}, status_code=400)
+    meetings.edit_proposal(meeting_id, proposal_id, description=b.get("description"),
+                           project_id=_int(b.get("project_id")), due_date=b.get("due_date") or None,
+                           owner=b.get("owner", ""))
+    task_id = meetings.approve(meeting_id, proposal_id)
+    if not task_id:
+        return JSONResponse({"ok": False, "error": "That item was already handled (maybe in Telegram)."},
+                            status_code=409)
+    return JSONResponse({"ok": True, "task_id": task_id})
+
+
+@app.post("/meetings/{meeting_id}/carried/{task_id}")
+async def meeting_carried(meeting_id: int, task_id: int, request: Request, email: str = Depends(require_auth)):
+    import json as _json
+    import meetings
+    b = await request.json()
+    action = b.get("action")
+    if action == "skip":
+        m = meetings.get(meeting_id)
+        if m:
+            meetings._set(meeting_id, carried=_json.dumps([c for c in m["carried"] if c.get("task_id") != task_id]))
+        return JSONResponse({"ok": True})
+    ok = meetings.apply_carried(meeting_id, task_id, "done" if action == "done" else "note", b.get("note") or "")
+    return JSONResponse({"ok": ok}, status_code=200 if ok else 404)
+
+
+@app.post("/meetings/{meeting_id}/{action}")
+def meeting_action(meeting_id: int, action: str, email: str = Depends(require_auth)):
+    import meetings
+    fn = {"close": meetings.close, "reopen": meetings.reopen, "delete": meetings.delete}.get(action)
+    if not fn:
+        return JSONResponse({"ok": False, "error": "Unknown action."}, status_code=404)
+    fn(meeting_id)
+    return JSONResponse({"ok": True})
 
 
 # ============================================================

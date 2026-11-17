@@ -440,7 +440,7 @@ def complete_task(task_id: int, sync_flag: bool = True):
 
 UPDATE_ACTIONS = ("waiting", "mine", "push", "done")
 UPDATE_SOURCES = {"dashboard": "Dashboard", "telegram": "Telegram", "voice": "Telegram voice note",
-                  "field": "Field", "chat": "Chat"}
+                  "field": "Field", "chat": "Chat", "meeting": "Meeting"}
 
 
 def add_update(task_id: int, body: str = "", source: str = "dashboard", action: str = None,

@@ -56,8 +56,15 @@ def page(t: dict, updates: list, back: str = "/tasks#register", error: str = "",
     if tier == 1 and t.get("days_overdue"):
         due = f"<span style='color:#FF8FC4;'>{t['days_overdue']}d overdue</span>"
     status = "" if is_open else "<span class='tp-closed'><i class='ti ti-check'></i> Closed</span>"
-    email = (f" <a href='{esc(t['source_url'])}' target='_blank' class='tp-mail' title='Open the email'>"
-             f"<i class='ti ti-mail'></i></a>") if t.get("source_url") else ""
+    src_url = t.get("source_url") or ""
+    if src_url.startswith("/meetings/"):
+        email = (f" <a href='{esc(src_url)}' class='tp-mail' title='Open the meeting'>"
+                 f"<i class='ti ti-users-group'></i></a>")
+    elif src_url:
+        email = (f" <a href='{esc(src_url)}' target='_blank' class='tp-mail' title='Open the email'>"
+                 f"<i class='ti ti-mail'></i></a>")
+    else:
+        email = ""
 
     log = "".join(_entry(u, i == 0, t["id"]) for i, u in enumerate(updates))
     if not log:

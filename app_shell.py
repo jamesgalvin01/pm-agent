@@ -49,6 +49,7 @@ TABS = (
     ("dashboard", "/tasks", "ti-list-check", "Tasks"),
     ("leads", "/leads", "ti-target-arrow", "Leads"),
     ("emails", "/emails", "ti-mail", "Email"),
+    ("meetings", "/meetings", "ti-users-group", "Meet"),
     ("chat", "/chat", "ti-message-circle", "Chat"),
     ("field", "/field", "ti-crane", "Field"),
 )
